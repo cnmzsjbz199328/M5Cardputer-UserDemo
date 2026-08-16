@@ -43,6 +43,10 @@ managed_components/
 # PlatformIO
 .pio/
 
+# Local cross-repo links. Recreate with tools/link-esp32-test.ps1.
+external/ecosystem_protocol/
+external/cardputer_controller_reference/
+
 # VSCode
 .vscode/
 .cache/
