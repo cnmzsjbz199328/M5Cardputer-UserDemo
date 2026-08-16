@@ -7,11 +7,12 @@ file(GLOB_RECURSE MY_SRCS
     "./apps/*.cpp"
 )
 
-set(MY_INCLUDE_DIRS 
+set(MY_INCLUDE_DIRS
     "."
     "./assets"
     "./hal"
     "./apps"
+    "../external/ecosystem_protocol"
 )
 
 set(PIKA_PYTHON_INCS
