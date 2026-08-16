@@ -30,4 +30,5 @@ private:
     void render_interface();
     void render_scan_list();
     void render_connected();
+    void draw_device_glyph(int cx, int cy, uint16_t color, bool active);
 };

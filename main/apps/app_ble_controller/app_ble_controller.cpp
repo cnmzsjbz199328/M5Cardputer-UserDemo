@@ -19,7 +19,7 @@ using namespace mooncake;
 
 AppBleController::AppBleController()
 {
-    setAppInfo().name     = "BLE Controller";
+    setAppInfo().name     = "BLE";
     setAppInfo().userData = new AppIcon_t(image_data_ble_controller_big, image_data_ble_controller_small);
 }
 
@@ -119,50 +119,65 @@ void AppBleController::render_interface()
     }
 }
 
+void AppBleController::draw_device_glyph(int cx, int cy, uint16_t color, bool active)
+{
+    const int size = active ? 34 : 24;
+    if (active) {
+        GetHAL().canvas.fillSmoothRoundRect(cx - size / 2, cy - size / 2, size, size, 6, THEME_COLOR_ICON);
+    }
+    GetHAL().canvas.drawRoundRect(cx - size / 4, cy - size / 3, size / 2, size * 2 / 3, 3, color);
+    GetHAL().canvas.fillCircle(cx, cy + size / 3, 2, color);
+}
+
 void AppBleController::render_scan_list()
 {
+    const int w = GetHAL().canvas.width();
+
     GetHAL().canvas.fillScreen(THEME_COLOR_BG);
     GetHAL().canvas.setTextColor(TFT_WHITE, THEME_COLOR_BG);
     GetHAL().canvas.setTextSize(1);
-    GetHAL().canvas.setCursor(4, 4);
-    GetHAL().canvas.print("BLE Controller");
+    GetHAL().canvas.setCursor(4, 2);
+    GetHAL().canvas.print("BLE");
 
     GetHAL().canvas.setTextColor(TFT_ORANGE, THEME_COLOR_BG);
-    GetHAL().canvas.setCursor(150, 4);
+    GetHAL().canvas.setCursor(w - 70, 2);
     GetHAL().canvas.print(ecp_client_get_status_text());
 
     const size_t count = ecp_client_get_device_count();
     if (count == 0) {
         GetHAL().canvas.setTextColor(TFT_DARKGREY, THEME_COLOR_BG);
-        GetHAL().canvas.setCursor(4, 24);
-        GetHAL().canvas.print("Scanning for ECP devices...");
+        GetHAL().canvas.setCursor(4, 44);
+        GetHAL().canvas.print("No ECP devices found yet");
         GetHAL().pushCanvas();
         return;
     }
+    if (_cursor >= count) _cursor = 0;
 
-    int y = 24;
-    for (size_t i = 0; i < count && i < 6; ++i) {
-        EcpClientDevice_t dev;
-        if (!ecp_client_get_device(i, &dev)) break;
+    // 3-slot carousel: previous / selected / next, matching the launcher's
+    // and the reference controller's device-icon carousel style.
+    const int cy         = 40;
+    const int centers[3] = {w / 2 - 60, w / 2, w / 2 + 60};
+    for (int offset = -1; offset <= 1; ++offset) {
+        const size_t idx  = (_cursor + offset + count) % count;
+        const bool active = (offset == 0);
+        draw_device_glyph(centers[offset + 1], cy, active ? TFT_CYAN : TFT_DARKGREY, active);
+        (void)idx;
+    }
 
-        if (i == _cursor) {
-            GetHAL().canvas.setTextColor(TFT_CYAN, THEME_COLOR_BG);
-            GetHAL().canvas.setCursor(4, y);
-            GetHAL().canvas.print("> ");
-        } else {
-            GetHAL().canvas.setTextColor(TFT_WHITE, THEME_COLOR_BG);
-            GetHAL().canvas.setCursor(4, y);
-            GetHAL().canvas.print("  ");
-        }
+    EcpClientDevice_t dev;
+    if (ecp_client_get_device(_cursor, &dev)) {
+        GetHAL().canvas.setTextColor(TFT_WHITE, THEME_COLOR_BG);
+        GetHAL().canvas.setCursor(4, 68);
         GetHAL().canvas.print(dev.label);
-        GetHAL().canvas.setCursor(190, y);
+
+        GetHAL().canvas.setTextColor(TFT_GREEN, THEME_COLOR_BG);
+        GetHAL().canvas.setCursor(w - 34, 68);
         GetHAL().canvas.printf("%d", dev.rssi);
-        y += 16;
     }
 
     GetHAL().canvas.setTextColor(TFT_DARKGREY, THEME_COLOR_BG);
-    GetHAL().canvas.setCursor(4, 118);
-    GetHAL().canvas.print("; / . move  enter connect");
+    GetHAL().canvas.setCursor(4, 88);
+    GetHAL().canvas.print("; / . rotate  enter connect");
 
     GetHAL().pushCanvas();
 }
