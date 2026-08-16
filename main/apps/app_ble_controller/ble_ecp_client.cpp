@@ -9,12 +9,20 @@
 #include <cstdio>
 #include <cstring>
 
+#include "esp_err.h"
 #include "esp_log.h"
+#include "host/ble_att.h"
 #include "host/ble_hs.h"
 #include "host/ble_hs_adv.h"
+#include "host/ble_hs_mbuf.h"
 #include "host/ble_gap.h"
 #include "host/ble_gatt.h"
 #include "host/ble_uuid.h"
+#include "host/util/util.h"
+#include "nimble/nimble_port.h"
+#include "nimble/nimble_port_freertos.h"
+
+extern "C" void ble_store_config_init(void);
 
 namespace {
 
@@ -66,10 +74,14 @@ bool parse_uuid128(const char* str, ble_uuid128_t* out)
 
 EcpUuids s_uuids;
 bool s_uuids_ready = false;
+bool s_nimble_started = false;
+bool s_scan_requested = false;
 
 EcpClientState_t s_state = ECP_CLIENT_STATE_IDLE;
 char s_status_text[32]   = "idle";
-char s_peer_label[24]    = "";
+char s_peer_label[32]    = "";
+char s_peer_caps[64]     = "";
+uint32_t s_tx_drop_count = 0;
 
 EcpClientDevice_t s_devices[ECP_CLIENT_MAX_DEVICES];
 size_t s_device_count = 0;
@@ -81,6 +93,8 @@ uint16_t s_info_handle      = 0;
 uint16_t s_command_handle   = 0;
 uint16_t s_response_handle  = 0;
 uint16_t s_state_handle     = 0;
+uint32_t s_pending_rid      = 0;
+uint16_t s_link_mtu         = BLE_ATT_MTU_DFLT;
 
 void set_status(const char* text)
 {
@@ -97,12 +111,92 @@ void reset_link()
     s_response_handle   = 0;
     s_state_handle      = 0;
     s_peer_label[0]     = '\0';
+    s_peer_caps[0]      = '\0';
+    s_link_mtu          = BLE_ATT_MTU_DFLT;
+    s_tx_drop_count     = 0;
+}
+
+void start_scan_locked();
+void start_service_discovery();
+
+bool get_own_addr_type(uint8_t* own_addr_type)
+{
+    int rc = ble_hs_id_infer_auto(0, own_addr_type);
+    if (rc != 0) {
+        ESP_LOGE(TAG, "ble_hs_id_infer_auto failed rc=%d", rc);
+        s_state = ECP_CLIENT_STATE_ERROR;
+        set_status("addr failed");
+        return false;
+    }
+    return true;
+}
+
+void on_host_sync()
+{
+    int rc = ble_hs_util_ensure_addr(0);
+    if (rc != 0) {
+        ESP_LOGE(TAG, "ble_hs_util_ensure_addr failed rc=%d", rc);
+        s_state = ECP_CLIENT_STATE_ERROR;
+        set_status("addr failed");
+        return;
+    }
+
+    ESP_LOGI(TAG, "NimBLE host synced");
+    if (s_scan_requested && s_state != ECP_CLIENT_STATE_CONNECTED && s_state != ECP_CLIENT_STATE_CONNECTING) {
+        start_scan_locked();
+    }
+}
+
+void host_task(void* param)
+{
+    (void)param;
+    ESP_LOGI(TAG, "NimBLE host task started");
+    nimble_port_run();
+    nimble_port_freertos_deinit();
+}
+
+bool ensure_nimble_started()
+{
+    if (s_nimble_started) return true;
+
+    esp_err_t ret = nimble_port_init();
+    if (ret != ESP_OK && ret != ESP_ERR_INVALID_STATE) {
+        ESP_LOGE(TAG, "nimble_port_init failed ret=%d", ret);
+        s_state = ECP_CLIENT_STATE_ERROR;
+        set_status("ble init fail");
+        return false;
+    }
+
+    ble_hs_cfg.sync_cb = on_host_sync;
+    ble_hs_cfg.store_status_cb = ble_store_util_status_rr;
+    ble_store_config_init();
+    int mtu_rc = ble_att_set_preferred_mtu(ecp::MAX_MESSAGE_BYTES + 3);
+    if (mtu_rc != 0) {
+        ESP_LOGW(TAG, "ble_att_set_preferred_mtu failed rc=%d", mtu_rc);
+    }
+
+    if (ret == ESP_OK) {
+        nimble_port_freertos_init(host_task);
+    }
+
+    s_nimble_started = true;
+    return true;
 }
 
 int gap_event_handler(struct ble_gap_event* event, void* arg);
 
 void start_scan_locked()
 {
+    if (!ble_hs_synced()) {
+        ESP_LOGW(TAG, "skip scan: NimBLE host not synced yet");
+        s_state = ECP_CLIENT_STATE_IDLE;
+        set_status("ble starting");
+        return;
+    }
+
+    uint8_t own_addr_type = 0;
+    if (!get_own_addr_type(&own_addr_type)) return;
+
     s_device_count = 0;
     s_state        = ECP_CLIENT_STATE_SCANNING;
     set_status("scanning");
@@ -114,7 +208,7 @@ void start_scan_locked()
     params.itvl              = 0x50;
     params.window            = 0x30;
 
-    int rc = ble_gap_disc(BLE_OWN_ADDR_PUBLIC, BLE_HS_FOREVER, &params, gap_event_handler, nullptr);
+    int rc = ble_gap_disc(own_addr_type, BLE_HS_FOREVER, &params, gap_event_handler, nullptr);
     if (rc != 0) {
         ESP_LOGE(TAG, "ble_gap_disc failed rc=%d", rc);
         s_state = ECP_CLIENT_STATE_ERROR;
@@ -132,6 +226,11 @@ bool adv_matches_ecp_service(const uint8_t* data, uint8_t length)
     return false;
 }
 
+bool adv_name_starts_with_eco(const struct ble_hs_adv_fields* fields)
+{
+    return fields->name != nullptr && fields->name_len >= 4 && memcmp(fields->name, "ECO-", 4) == 0;
+}
+
 void addr_to_str(const ble_addr_t* addr, char* out, size_t out_size)
 {
     snprintf(out, out_size, "%02x:%02x:%02x:%02x:%02x:%02x", addr->val[5], addr->val[4], addr->val[3], addr->val[2],
@@ -140,15 +239,26 @@ void addr_to_str(const ble_addr_t* addr, char* out, size_t out_size)
 
 void handle_disc_event(struct ble_gap_disc_desc* disc)
 {
-    if (!adv_matches_ecp_service(disc->data, disc->length_data)) return;
-
     char address[18];
     addr_to_str(&disc->addr, address, sizeof(address));
 
     struct ble_hs_adv_fields fields;
-    char label[24] = "";
-    if (ble_hs_adv_parse_fields(&fields, disc->data, disc->length_data) == 0 && fields.name != nullptr &&
-        fields.name_len > 0) {
+    char label[32] = "";
+    const bool fields_ok = ble_hs_adv_parse_fields(&fields, disc->data, disc->length_data) == 0;
+
+    size_t existing = ECP_CLIENT_MAX_DEVICES;
+    for (size_t i = 0; i < s_device_count; ++i) {
+        if (strcmp(s_devices[i].address, address) == 0) {
+            existing = i;
+            break;
+        }
+    }
+
+    const bool ecp_service = fields_ok && adv_matches_ecp_service(disc->data, disc->length_data);
+    const bool eco_name = fields_ok && adv_name_starts_with_eco(&fields);
+    if (!ecp_service && !eco_name && existing == ECP_CLIENT_MAX_DEVICES) return;
+
+    if (fields_ok && fields.name != nullptr && fields.name_len > 0) {
         size_t n = fields.name_len < sizeof(label) - 1 ? fields.name_len : sizeof(label) - 1;
         memcpy(label, fields.name, n);
         label[n] = '\0';
@@ -156,11 +266,12 @@ void handle_disc_event(struct ble_gap_disc_desc* disc)
         snprintf(label, sizeof(label), "%s", address);
     }
 
-    for (size_t i = 0; i < s_device_count; ++i) {
-        if (strcmp(s_devices[i].address, address) == 0) {
-            s_devices[i].rssi = static_cast<int8_t>(disc->rssi);
-            return;
+    if (existing != ECP_CLIENT_MAX_DEVICES) {
+        s_devices[existing].rssi = static_cast<int8_t>(disc->rssi);
+        if (label[0] != '\0' && strcmp(label, address) != 0) {
+            snprintf(s_devices[existing].label, sizeof(s_devices[existing].label), "%s", label);
         }
+        return;
     }
     if (s_device_count >= ECP_CLIENT_MAX_DEVICES) return;
 
@@ -169,6 +280,68 @@ void handle_disc_event(struct ble_gap_disc_desc* disc)
     dev.address_type = disc->addr.type;
     snprintf(dev.label, sizeof(dev.label), "%s", label);
     dev.rssi = static_cast<int8_t>(disc->rssi);
+}
+
+void json_escape_char(char ch, char* out, size_t out_size)
+{
+    if (out_size == 0) return;
+    if (ch == '"' || ch == '\\') {
+        snprintf(out, out_size, "\\%c", ch);
+    } else if (ch == '\n') {
+        snprintf(out, out_size, "\\n");
+    } else if (ch == '\r') {
+        snprintf(out, out_size, "\\r");
+    } else if (ch == '\t') {
+        snprintf(out, out_size, "\\t");
+    } else if (static_cast<unsigned char>(ch) < 0x20) {
+        snprintf(out, out_size, "\\u%04x", static_cast<unsigned char>(ch));
+    } else {
+        snprintf(out, out_size, "%c", ch);
+    }
+}
+
+// Extracts the "capabilities":[...] string array from an INFO characteristic
+// JSON payload into a flat comma-separated list (e.g. "imu,input.remote.imu"),
+// without depending on a full JSON parser. Matches the field the reference
+// Cardputer controller reads via ArduinoJson in connect_selected()/
+// set_capabilities().
+void extract_capabilities(const char* json, char* out, size_t out_size)
+{
+    out[0] = '\0';
+    const char* key = strstr(json, "\"capabilities\"");
+    if (key == nullptr) return;
+    const char* start = strchr(key, '[');
+    if (start == nullptr) return;
+    const char* end = strchr(start, ']');
+    if (end == nullptr) return;
+
+    size_t oi = 0;
+    for (const char* p = start + 1; p < end && oi < out_size - 1; ++p) {
+        if (*p == '"' || *p == ' ') continue;
+        out[oi++] = *p;
+    }
+    out[oi] = '\0';
+}
+
+int info_read_cb(uint16_t conn_handle, const struct ble_gatt_error* error, struct ble_gatt_attr* attr, void* arg)
+{
+    (void)arg;
+    if (conn_handle != s_conn_handle) return 0;
+
+    if (error->status != 0 || attr == nullptr || attr->om == nullptr) {
+        ESP_LOGW(TAG, "INFO read failed status=%d", error != nullptr ? error->status : -1);
+        return 0;
+    }
+
+    char buf[224];
+    uint16_t len = OS_MBUF_PKTLEN(attr->om);
+    if (len >= sizeof(buf)) len = sizeof(buf) - 1;
+    if (ble_hs_mbuf_to_flat(attr->om, buf, len, nullptr) != 0) return 0;
+    buf[len] = '\0';
+
+    extract_capabilities(buf, s_peer_caps, sizeof(s_peer_caps));
+    ESP_LOGI(TAG, "INFO capabilities=\"%s\"", s_peer_caps);
+    return 0;
 }
 
 int chr_disc_cb(uint16_t conn_handle, const struct ble_gatt_error* error, const struct ble_gatt_chr* chr, void* arg)
@@ -195,6 +368,11 @@ int chr_disc_cb(uint16_t conn_handle, const struct ble_gatt_error* error, const 
         set_status("connected");
         ESP_LOGI(TAG, "ECP characteristics discovered, info=%u command=%u response=%u state=%u", s_info_handle,
                  s_command_handle, s_response_handle, s_state_handle);
+
+        int rc = ble_gattc_read(s_conn_handle, s_info_handle, info_read_cb, nullptr);
+        if (rc != 0) {
+            ESP_LOGW(TAG, "ble_gattc_read(info) failed rc=%d", rc);
+        }
     } else {
         ESP_LOGW(TAG, "ECP characteristic discovery incomplete");
         set_status("protocol incomplete");
@@ -234,6 +412,35 @@ int svc_disc_cb(uint16_t conn_handle, const struct ble_gatt_error* error, const 
     return 0;
 }
 
+void start_service_discovery()
+{
+    int rc = ble_gattc_disc_svc_by_uuid(s_conn_handle, &s_uuids.service.u, svc_disc_cb, nullptr);
+    if (rc != 0) {
+        ESP_LOGE(TAG, "ble_gattc_disc_svc_by_uuid failed rc=%d", rc);
+        set_status("connect failed");
+        s_state = ECP_CLIENT_STATE_ERROR;
+        ble_gap_terminate(s_conn_handle, BLE_ERR_REM_USER_CONN_TERM);
+    }
+}
+
+int mtu_exchange_cb(uint16_t conn_handle, const struct ble_gatt_error* error, uint16_t mtu, void* arg)
+{
+    (void)arg;
+    if (conn_handle != s_conn_handle) return 0;
+
+    if (error->status == 0) {
+        s_link_mtu = mtu;
+        ESP_LOGI(TAG, "MTU exchange complete mtu=%u", static_cast<unsigned>(mtu));
+    } else {
+        ESP_LOGW(TAG, "MTU exchange failed status=%d; continuing with mtu=%u", error->status,
+                 static_cast<unsigned>(s_link_mtu));
+    }
+
+    set_status("discovering");
+    start_service_discovery();
+    return 0;
+}
+
 int gap_event_handler(struct ble_gap_event* event, void* arg)
 {
     (void)arg;
@@ -246,13 +453,12 @@ int gap_event_handler(struct ble_gap_event* event, void* arg)
             if (event->connect.status == 0) {
                 s_conn_handle = event->connect.conn_handle;
                 s_state       = ECP_CLIENT_STATE_CONNECTING;
-                set_status("discovering");
-                int rc = ble_gattc_disc_svc_by_uuid(s_conn_handle, &s_uuids.service.u, svc_disc_cb, nullptr);
+                set_status("mtu");
+                int rc = ble_gattc_exchange_mtu(s_conn_handle, mtu_exchange_cb, nullptr);
                 if (rc != 0) {
-                    ESP_LOGE(TAG, "ble_gattc_disc_svc_by_uuid failed rc=%d", rc);
-                    set_status("connect failed");
-                    s_state = ECP_CLIENT_STATE_ERROR;
-                    ble_gap_terminate(s_conn_handle, BLE_ERR_REM_USER_CONN_TERM);
+                    ESP_LOGW(TAG, "ble_gattc_exchange_mtu failed rc=%d; discovering anyway", rc);
+                    set_status("discovering");
+                    start_service_discovery();
                 }
             } else {
                 ESP_LOGW(TAG, "connect failed status=%d", event->connect.status);
@@ -270,6 +476,13 @@ int gap_event_handler(struct ble_gap_event* event, void* arg)
             start_scan_locked();
             return 0;
 
+        case BLE_GAP_EVENT_MTU:
+            if (event->mtu.conn_handle == s_conn_handle) {
+                s_link_mtu = event->mtu.value;
+                ESP_LOGI(TAG, "MTU update event mtu=%u", static_cast<unsigned>(s_link_mtu));
+            }
+            return 0;
+
         default:
             return 0;
     }
@@ -279,6 +492,8 @@ int gap_event_handler(struct ble_gap_event* event, void* arg)
 
 void ecp_client_init(void)
 {
+    ensure_nimble_started();
+
     if (s_uuids_ready) return;
     parse_uuid128(ecp::SERVICE_UUID, &s_uuids.service);
     parse_uuid128(ecp::INFO_UUID, &s_uuids.info);
@@ -290,6 +505,8 @@ void ecp_client_init(void)
 
 void ecp_client_start_scan(void)
 {
+    s_scan_requested = true;
+    if (!ensure_nimble_started()) return;
     if (!s_uuids_ready) return;
     if (s_state == ECP_CLIENT_STATE_CONNECTED || s_state == ECP_CLIENT_STATE_CONNECTING) return;
     start_scan_locked();
@@ -297,6 +514,7 @@ void ecp_client_start_scan(void)
 
 void ecp_client_stop_scan(void)
 {
+    s_scan_requested = false;
     if (s_state != ECP_CLIENT_STATE_SCANNING) return;
     (void)ble_gap_disc_cancel();
     s_state = ECP_CLIENT_STATE_IDLE;
@@ -319,6 +537,7 @@ bool ecp_client_connect(size_t index)
 {
     if (index >= s_device_count) return false;
     if (s_state == ECP_CLIENT_STATE_CONNECTING || s_state == ECP_CLIENT_STATE_CONNECTED) return false;
+    s_scan_requested = false;
 
     if (s_state == ECP_CLIENT_STATE_SCANNING) {
         (void)ble_gap_disc_cancel();
@@ -340,13 +559,102 @@ bool ecp_client_connect(size_t index)
     s_state = ECP_CLIENT_STATE_CONNECTING;
     set_status("connecting");
 
-    int rc = ble_gap_connect(BLE_OWN_ADDR_PUBLIC, &addr, 30000, nullptr, gap_event_handler, nullptr);
+    if (!ble_hs_synced()) {
+        ESP_LOGW(TAG, "skip connect: NimBLE host not synced yet");
+        s_state = ECP_CLIENT_STATE_IDLE;
+        set_status("ble starting");
+        return false;
+    }
+
+    uint8_t own_addr_type = 0;
+    if (!get_own_addr_type(&own_addr_type)) return false;
+
+    int rc = ble_gap_connect(own_addr_type, &addr, 30000, nullptr, gap_event_handler, nullptr);
     if (rc != 0) {
         ESP_LOGE(TAG, "ble_gap_connect failed rc=%d", rc);
         s_state = ECP_CLIENT_STATE_ERROR;
         set_status("connect failed");
         return false;
     }
+    return true;
+}
+
+bool ecp_client_send_key(const char* key, char char_val)
+{
+    if (s_state != ECP_CLIENT_STATE_CONNECTED || s_conn_handle == BLE_HS_CONN_HANDLE_NONE || s_command_handle == 0 ||
+        key == nullptr) {
+        return false;
+    }
+
+    s_pending_rid++;
+    if (s_pending_rid == 0) s_pending_rid++;
+
+    char payload[160];
+    if (strcmp(key, "char") == 0) {
+        char escaped[8];
+        json_escape_char(char_val, escaped, sizeof(escaped));
+        snprintf(payload, sizeof(payload), "{\"v\":%u,\"rid\":%lu,\"op\":\"%s\",\"key\":\"char\",\"event\":\"press\","
+                                           "\"char\":\"%s\"}",
+                 static_cast<unsigned>(ecp::PROTOCOL_VERSION), static_cast<unsigned long>(s_pending_rid),
+                 ecp::OP_INPUT_KEY, escaped);
+    } else {
+        snprintf(payload, sizeof(payload), "{\"v\":%u,\"rid\":%lu,\"op\":\"%s\",\"key\":\"%s\",\"event\":\"press\"}",
+                 static_cast<unsigned>(ecp::PROTOCOL_VERSION), static_cast<unsigned long>(s_pending_rid),
+                 ecp::OP_INPUT_KEY, key);
+    }
+
+    const size_t payload_len = strlen(payload);
+    if (payload_len > static_cast<size_t>(s_link_mtu > 3 ? s_link_mtu - 3 : 0)) {
+        ESP_LOGW(TAG, "input.key payload too large len=%u mtu=%u key=%s", static_cast<unsigned>(payload_len),
+                 static_cast<unsigned>(s_link_mtu), key);
+        set_status("mtu small");
+        s_tx_drop_count++;
+        return false;
+    }
+
+    int rc = ble_gattc_write_no_rsp_flat(s_conn_handle, s_command_handle, payload, payload_len);
+    if (rc != 0) {
+        ESP_LOGW(TAG, "input.key write failed rc=%d key=%s", rc, key);
+        set_status("key drop");
+        s_tx_drop_count++;
+        return false;
+    }
+
+    set_status("keys active");
+    return true;
+}
+
+bool ecp_client_send_imu(uint32_t seq, int16_t ax, int16_t ay, int16_t az, int16_t gx, int16_t gy, int16_t gz)
+{
+    if (s_state != ECP_CLIENT_STATE_CONNECTED || s_conn_handle == BLE_HS_CONN_HANDLE_NONE || s_command_handle == 0) {
+        return false;
+    }
+
+    s_pending_rid++;
+    if (s_pending_rid == 0) s_pending_rid++;
+
+    char payload[192];
+    snprintf(payload, sizeof(payload),
+             "{\"v\":%u,\"rid\":%lu,\"op\":\"%s\",\"seq\":%lu,\"ax\":%d,\"ay\":%d,\"az\":%d,\"gx\":%d,\"gy\":%d,"
+             "\"gz\":%d}",
+             static_cast<unsigned>(ecp::PROTOCOL_VERSION), static_cast<unsigned long>(s_pending_rid),
+             ecp::OP_INPUT_IMU, static_cast<unsigned long>(seq), ax, ay, az, gx, gy, gz);
+
+    const size_t payload_len = strlen(payload);
+    if (payload_len > static_cast<size_t>(s_link_mtu > 3 ? s_link_mtu - 3 : 0)) {
+        ESP_LOGW(TAG, "input.imu payload too large len=%u mtu=%u", static_cast<unsigned>(payload_len),
+                 static_cast<unsigned>(s_link_mtu));
+        s_tx_drop_count++;
+        return false;
+    }
+
+    int rc = ble_gattc_write_no_rsp_flat(s_conn_handle, s_command_handle, payload, payload_len);
+    if (rc != 0) {
+        ESP_LOGW(TAG, "input.imu write failed rc=%d", rc);
+        s_tx_drop_count++;
+        return false;
+    }
+
     return true;
 }
 
@@ -371,4 +679,19 @@ const char* ecp_client_get_status_text(void)
 const char* ecp_client_get_peer_label(void)
 {
     return s_peer_label;
+}
+
+const char* ecp_client_get_peer_capabilities(void)
+{
+    return s_peer_caps;
+}
+
+uint16_t ecp_client_get_link_mtu(void)
+{
+    return s_link_mtu;
+}
+
+uint32_t ecp_client_get_tx_drop_count(void)
+{
+    return s_tx_drop_count;
 }

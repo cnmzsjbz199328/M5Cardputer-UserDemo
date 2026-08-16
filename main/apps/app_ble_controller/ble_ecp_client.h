@@ -17,8 +17,8 @@
 //
 // Scope of this first slice (see docs/ble-controller-migration.md): scan,
 // connect, GATT service/characteristic discovery, disconnect, and device
-// listing. input.key forwarding, STATE notify subscription and IMU
-// publishing are follow-up slices.
+// listing. input.key and input.imu forwarding have since been added; STATE
+// notify subscription is still a follow-up slice.
 //
 // NOT build-verified: this environment has no ESP-IDF toolchain available,
 // so this file has only been reviewed statically against the NimBLE APIs
@@ -48,7 +48,7 @@ typedef enum {
 typedef struct {
     char address[18];  // "aa:bb:cc:dd:ee:ff"
     uint8_t address_type;
-    char label[24];
+    char label[32];
     int8_t rssi;
 } EcpClientDevice_t;
 
@@ -72,6 +72,15 @@ bool ecp_client_get_device(size_t index, EcpClientDevice_t* out);
 // by ecp_client_get_state()/ecp_client_get_status_text().
 bool ecp_client_connect(size_t index);
 
+// Sends an ECP input.key press to the connected peer. char_val is only used
+// when key is "char"; pass '\0' for semantic keys such as "enter".
+bool ecp_client_send_key(const char* key, char char_val);
+
+// Sends one ECP input.imu sample to the connected peer. Accel fields are
+// milli-g, gyro fields are degrees/sec, matching the reference Cardputer
+// controller's wire format (external/cardputer_controller_reference).
+bool ecp_client_send_imu(uint32_t seq, int16_t ax, int16_t ay, int16_t az, int16_t gx, int16_t gy, int16_t gz);
+
 // Disconnects the current peer (if any) and returns to scanning.
 void ecp_client_disconnect(void);
 
@@ -81,6 +90,14 @@ EcpClientState_t ecp_client_get_state(void);
 const char* ecp_client_get_status_text(void);
 // Label of the currently connected/connecting peer, empty string if none.
 const char* ecp_client_get_peer_label(void);
+// Comma-separated capability list read from the peer's INFO characteristic
+// (e.g. "imu,input.remote.imu"), empty string if not yet read or unknown.
+const char* ecp_client_get_peer_capabilities(void);
+// Negotiated ATT MTU of the current/last link, in bytes.
+uint16_t ecp_client_get_link_mtu(void);
+// Count of input.key/input.imu writes dropped (oversized payload or GATT
+// write failure) since the current connection was established.
+uint32_t ecp_client_get_tx_drop_count(void);
 
 #ifdef __cplusplus
 }
