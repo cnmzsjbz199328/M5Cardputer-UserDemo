@@ -16,3 +16,4 @@
 #include "app_imu/app_imu.h"
 #include "app_sdcard/app_sdcard.h"
 #include "app_ble_controller/app_ble_controller.h"
+#include "app_time_machine/app_time_machine.h"
