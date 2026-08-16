@@ -1,0 +1,26 @@
+{
+  "title": "Nvidia Time Machine",
+  "symbol": "NVDA",
+  "initialInvestment": 1000,
+  "anchors": [
+    { "year": 2010.0, "price": 0.35, "label": "'10" },
+    { "year": 2012.0, "price": 0.30, "label": "'12" },
+    { "year": 2014.0, "price": 0.48, "label": "'14" },
+    { "year": 2016.0, "price": 2.60, "label": "'16" },
+    { "year": 2018.0, "price": 3.50, "label": "'18" },
+    { "year": 2020.0, "price": 13.00, "label": "'20" },
+    { "year": 2021.0, "price": 29.00, "label": "'21" },
+    { "year": 2022.5, "price": 14.60, "label": "'22" },
+    { "year": 2023.5, "price": 49.00, "label": "'23" },
+    { "year": 2024.5, "price": 120.00, "label": "'24" },
+    { "year": 2025.5, "price": 180.00, "label": "'25" },
+    { "year": 2026.62, "price": 165.00, "label": "now" }
+  ],
+  "events": [
+    { "year": 2016.0, "label": "GPU run", "mood": "hopeful" },
+    { "year": 2020.0, "label": "data center", "mood": "euphoria" },
+    { "year": 2022.5, "label": "reset", "mood": "nervous" },
+    { "year": 2023.5, "label": "AI boom", "mood": "euphoria" },
+    { "year": 2024.5, "label": "split", "mood": "diamond hands" }
+  ]
+}

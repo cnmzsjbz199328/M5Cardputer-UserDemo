@@ -1,0 +1,25 @@
+{
+  "title": "GameStop Time Machine",
+  "symbol": "GME",
+  "initialInvestment": 1000,
+  "anchors": [
+    { "year": 2010.0, "price": 5.00, "label": "'10" },
+    { "year": 2013.0, "price": 12.00, "label": "'13" },
+    { "year": 2016.0, "price": 8.00, "label": "'16" },
+    { "year": 2019.0, "price": 1.00, "label": "'19" },
+    { "year": 2020.6, "price": 4.70, "label": "'20" },
+    { "year": 2021.08, "price": 86.00, "label": "'21" },
+    { "year": 2021.5, "price": 40.00, "label": "'21" },
+    { "year": 2022.5, "price": 25.00, "label": "'22" },
+    { "year": 2023.5, "price": 16.00, "label": "'23" },
+    { "year": 2024.4, "price": 48.00, "label": "'24" },
+    { "year": 2025.5, "price": 25.00, "label": "'25" },
+    { "year": 2026.62, "price": 22.00, "label": "now" }
+  ],
+  "events": [
+    { "year": 2019.0, "label": "left for dead", "mood": "regret" },
+    { "year": 2021.08, "label": "squeeze", "mood": "euphoria" },
+    { "year": 2021.5, "label": "halt city", "mood": "panic" },
+    { "year": 2024.4, "label": "meme wave", "mood": "euphoria" }
+  ]
+}
