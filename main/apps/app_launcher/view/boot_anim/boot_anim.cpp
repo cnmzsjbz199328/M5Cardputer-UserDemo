@@ -68,7 +68,7 @@ void Launcher::boot_anim()
     // Play sfx
 #ifndef NO_BOOT_PLAY
     if (!audio::is_quiet_mode()) {
-        GetHAL().speaker.setVolume(audio::DEFAULT_VOLUME);
+        GetHAL().speaker.setVolume(GetHAL().getVolume());
         GetHAL().speaker.playWav(boot_sfx, sizeof(boot_sfx));
     }
 #endif
@@ -81,7 +81,7 @@ void Launcher::boot_anim()
         GetHAL().update();
 
         if (GetHAL().homeButton.wasPressed()) {
-            GetHAL().speaker.setVolume(audio::DEFAULT_VOLUME);
+            GetHAL().speaker.setVolume(GetHAL().getVolume());
             audio::play_random_tone();
             break;
         }

@@ -124,7 +124,7 @@ static void _keyboard_sfx_on_key_event(const Keyboard::KeyEvent_t& event)
         return;
     }
 
-    GetHAL().speaker.setVolume(DEFAULT_VOLUME);
+    GetHAL().speaker.setVolume(GetHAL().getVolume());
 
     int semitoneShift = 48;
     switch (event.keyCode) {

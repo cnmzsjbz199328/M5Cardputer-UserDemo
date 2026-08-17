@@ -9,6 +9,8 @@
 #include <mooncake_log.h>
 #include <M5Unified.hpp>
 #include <esp_mac.h>
+#include <algorithm>
+#include <limits>
 #include <memory>
 
 static std::unique_ptr<Hal> _hal_instance;
@@ -34,6 +36,7 @@ void Hal::init()
     display_init();
     i2c_scan();
     keyboard_init();
+    screen_timeout_init();
     setting_init();
     spi_init();
 }
@@ -41,8 +44,20 @@ void Hal::init()
 void Hal::update()
 {
     M5.update();
+    if (homeButton.wasClicked()) {
+        resetScreenIdleTimer();
+    }
     keyboard.update();
     capLora868.update();
+
+    if (_screen_timeout_sec > 0 && !_screen_dimmed) {
+        constexpr uint32_t kMillisPerSecond = 1000;
+        const uint32_t timeout_ms          = _screen_timeout_sec * kMillisPerSecond;
+        if (millis() - _last_activity_ms > timeout_ms) {
+            display.setBrightness(0);
+            _screen_dimmed = true;
+        }
+    }
 }
 
 void Hal::feedTheDog()
@@ -120,6 +135,66 @@ void Hal::setting_init()
     ESP_ERROR_CHECK(ret);
 
     _settings = new Settings("cardputer", true);
+
+    _brightness = static_cast<uint8_t>(std::clamp<int32_t>(_settings->GetInt("brightness", 128), 0, 255));
+    _volume     = static_cast<uint8_t>(std::clamp<int32_t>(_settings->GetInt("volume", audio::DEFAULT_VOLUME), 0, 255));
+
+    const int32_t screen_timeout = _settings->GetInt("screen_timeout_s", 0);
+    if (screen_timeout <= 0) {
+        _screen_timeout_sec = 0;
+    } else {
+        const auto max_timeout = std::numeric_limits<uint32_t>::max() / 1000;
+        _screen_timeout_sec = static_cast<uint32_t>(screen_timeout) > max_timeout
+                                  ? max_timeout
+                                  : static_cast<uint32_t>(screen_timeout);
+    }
+
+    display.setBrightness(_brightness);
+    speaker.setVolume(_volume);
+}
+
+void Hal::setBrightness(uint8_t value)
+{
+    _brightness = value;
+    display.setBrightness(_screen_dimmed ? 0 : _brightness);
+    getSettings().SetInt("brightness", _brightness);
+    getSettings().Commit();
+}
+
+void Hal::setVolume(uint8_t value)
+{
+    _volume = value;
+    speaker.setVolume(_volume);
+    getSettings().SetInt("volume", _volume);
+    getSettings().Commit();
+}
+
+void Hal::setScreenTimeoutSec(uint32_t seconds)
+{
+    const auto max_timeout = std::numeric_limits<uint32_t>::max() / 1000;
+    _screen_timeout_sec = std::min(seconds, max_timeout);
+    getSettings().SetInt("screen_timeout_s", static_cast<int32_t>(_screen_timeout_sec));
+    getSettings().Commit();
+    resetScreenIdleTimer();
+}
+
+void Hal::resetScreenIdleTimer()
+{
+    _last_activity_ms = millis();
+    if (_screen_dimmed) {
+        display.setBrightness(_brightness);
+        _screen_dimmed = false;
+    }
+}
+
+void Hal::screen_timeout_init()
+{
+    _last_activity_ms = millis();
+    _screen_timeout_event_slot_id = keyboard.onKeyEvent.connect([this](const Keyboard::KeyEvent_t&) {
+        // This is a simple global idle timer. Long-running apps can call
+        // GetHAL().resetScreenIdleTimer() periodically if they need to suppress auto-dim.
+        resetScreenIdleTimer();
+    });
 }
 
 /* -------------------------------------------------------------------------- */

@@ -73,6 +73,14 @@ void Settings::SetInt(const std::string& key, int32_t value)
     }
 }
 
+void Settings::Commit()
+{
+    if (read_write_ && dirty_) {
+        ESP_ERROR_CHECK(nvs_commit(nvs_handle_));
+        dirty_ = false;
+    }
+}
+
 bool Settings::GetBool(const std::string& key, bool default_value)
 {
     if (nvs_handle_ == 0) {

@@ -51,9 +51,21 @@ public:
         canvas.pushSprite(canvasKeyboardBar.width(), canvasSystemBar.height());
     }
 
+    uint8_t getBrightness() const
+    {
+        return _brightness;
+    }
+    void setBrightness(uint8_t value);
+
     /* ---------------------------------- Audio --------------------------------- */
     m5::Speaker_Class& speaker = M5.Speaker;
     m5::Mic_Class& mic         = M5.Mic;
+
+    uint8_t getVolume() const
+    {
+        return _volume;
+    }
+    void setVolume(uint8_t value);
 
     /* ---------------------------------- Input --------------------------------- */
     m5::Button_Class& homeButton = M5.BtnA;
@@ -64,6 +76,13 @@ public:
     {
         return M5.Power.getBatteryLevel();
     }
+
+    uint32_t getScreenTimeoutSec() const
+    {
+        return _screen_timeout_sec;
+    }
+    void setScreenTimeoutSec(uint32_t seconds);
+    void resetScreenIdleTimer();
 
     /* ---------------------------------- WiFi ---------------------------------- */
     using ScanResult_t = std::pair<int, std::string>;
@@ -154,11 +173,18 @@ private:
     bool _sd_card_msc_ready         = false;
     int _ble_keyboard_event_slot_id = -1;
     int _usb_keyboard_event_slot_id = -1;
+    uint8_t _brightness              = 128;
+    uint8_t _volume                  = 90;
+    uint32_t _screen_timeout_sec     = 0;
+    uint32_t _last_activity_ms       = 0;
+    bool _screen_dimmed              = false;
+    int _screen_timeout_event_slot_id = -1;
     std::unique_ptr<CapLoRa868> _cap_lora868;
 
     void display_init();
     void i2c_scan();
     void keyboard_init();
+    void screen_timeout_init();
     void start_sntp();
     void stop_sntp();
     void setting_init();
