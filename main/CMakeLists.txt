@@ -12,6 +12,10 @@ set(MY_INCLUDE_DIRS
     "./assets"
     "./hal"
     "./apps"
+    "./apps/app_solar_system"
+    "./apps/app_solar_system/core"
+    "./apps/app_solar_system/data"
+    "./apps/app_solar_system/render"
     "../external/ecosystem_protocol"
 )
 

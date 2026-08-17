@@ -37,6 +37,7 @@ extern "C" void app_main(void)
     GetMooncake().installApp(std::make_unique<AppSdcard>());
     GetMooncake().installApp(std::make_unique<AppBleController>());
     GetMooncake().installApp(std::make_unique<AppTimeMachine>());
+    GetMooncake().installApp(std::make_unique<AppSolarSystem>());
     // GetMooncake().installApp(std::make_unique<AppDummy>());
 
     // Main loop
