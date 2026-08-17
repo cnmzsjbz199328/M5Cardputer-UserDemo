@@ -39,7 +39,6 @@ void AppWifiScan::onOpen()
     _wifi_password.clear();
     _current_state      = STATE_SCANNING;
     _connection_result  = false;
-    _time_count          = 0;
 
     load_saved_wifi_settings();
 
@@ -49,20 +48,11 @@ void AppWifiScan::onOpen()
 
     GetHAL().wifiInit();
     render_page_scanning();
+    do_scan();
 }
 
 void AppWifiScan::onRunning()
 {
-    // Rescan while in the scanning/select state
-    if (_current_state == STATE_SCANNING && GetHAL().millis() - _time_count > SCAN_PERIOD) {
-        GetHAL().wifiScan(_scan_result);
-        if (_selected_index >= static_cast<int>(_scan_result.size())) {
-            _selected_index = 0;
-        }
-        render_page_result();
-        _time_count = GetHAL().millis();
-    }
-
     // Update cursor blinking
     update_cursor();
 
@@ -84,6 +74,15 @@ void AppWifiScan::onClose()
     if (_key_event_slot_id >= 0) {
         GetHAL().keyboard.onKeyEvent.disconnect(_key_event_slot_id);
     }
+}
+
+void AppWifiScan::do_scan()
+{
+    GetHAL().wifiScan(_scan_result);
+    if (_selected_index >= static_cast<int>(_scan_result.size())) {
+        _selected_index = 0;
+    }
+    render_page_result();
 }
 
 void AppWifiScan::render_page_scanning()
@@ -140,7 +139,8 @@ void AppWifiScan::render_page_result()
         }
 
         GetHAL().canvas.setTextColor(TFT_WHITE, THEME_COLOR_BG);
-        GetHAL().canvas.println("Up/Down + Enter to connect");
+        GetHAL().canvas.println(",/. select, Enter connect");
+        GetHAL().canvas.println("Space to rescan");
     }
 
     GetHAL().pushCanvas();
@@ -205,6 +205,13 @@ void AppWifiScan::handle_key_event(const Keyboard::KeyEvent_t& keyEvent)
 
 void AppWifiScan::handle_scanning_key(const Keyboard::KeyEvent_t& keyEvent)
 {
+    // Manual rescan, works even when the list is empty
+    if (keyEvent.keyCode == KEY_SPACE) {
+        render_page_scanning();
+        do_scan();
+        return;
+    }
+
     if (_scan_result.empty()) {
         return;
     }
@@ -212,12 +219,16 @@ void AppWifiScan::handle_scanning_key(const Keyboard::KeyEvent_t& keyEvent)
     int list_count = std::min(static_cast<int>(_scan_result.size()), MAX_LIST_ITEMS);
 
     switch (keyEvent.keyCode) {
+        // KEY_UP/KEY_DOWN come from the Fn+;/. combo; also accept the plain
+        // ,/. keys since Fn combos can be finicky to hit reliably.
         case KEY_UP:
+        case KEY_COMMA:
             _selected_index = (_selected_index - 1 + list_count) % list_count;
             render_page_result();
             break;
 
         case KEY_DOWN:
+        case KEY_DOT:
             _selected_index = (_selected_index + 1) % list_count;
             render_page_result();
             break;

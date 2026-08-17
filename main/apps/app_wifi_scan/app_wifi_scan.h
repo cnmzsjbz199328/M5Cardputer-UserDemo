@@ -33,13 +33,11 @@ private:
 
     static constexpr size_t INPUT_BUFFER_SIZE     = 128;
     static constexpr uint32_t CURSOR_BLINK_PERIOD = 500;
-    static constexpr uint32_t SCAN_PERIOD         = 5000;
     static constexpr int MAX_LIST_ITEMS           = 6;
 
     State_t _current_state = STATE_SCANNING;
     std::vector<Hal::ScanResult_t> _scan_result;
-    int _selected_index   = 0;
-    uint32_t _time_count  = 0;
+    int _selected_index = 0;
 
     uint32_t _cursor_update_time = 0;
     bool _cursor_state           = false;
@@ -57,6 +55,7 @@ private:
     void handle_backspace();
     void update_cursor();
     void process_state_machine();
+    void do_scan();
 
     void render_page_scanning();
     void render_page_result();
