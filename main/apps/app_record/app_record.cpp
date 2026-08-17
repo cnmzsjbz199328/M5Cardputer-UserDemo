@@ -7,6 +7,7 @@
 #include "assets/record_big.h"
 #include "assets/record_small.h"
 #include <apps/utils/audio/audio.h>
+#include <apps/utils/audio/mp3_decoder.h>
 #include <apps/utils/common.h>
 #include <apps/utils/theme.h>
 #include <mooncake_log.h>
@@ -240,6 +241,11 @@ void AppRecord::stop_recording_and_play()
 
 void AppRecord::play_file(const std::string& path)
 {
+    if (audio::is_mp3_file(path)) {
+        audio::play_mp3_file(path, PLAYBACK_CHANNEL);
+        return;
+    }
+
     FILE* f = std::fopen(path.c_str(), "rb");
     if (!f) {
         mclog::tagError(getAppInfo().name, "playback open {} failed: {}", path, std::strerror(errno));
