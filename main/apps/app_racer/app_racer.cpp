@@ -11,6 +11,8 @@ namespace {
 
 constexpr uint32_t kRenderIntervalMs = 33;
 constexpr float kMaxSpeed = 280.0f;
+constexpr float kCollisionDistance = 23.0f;
+constexpr float kCollisionLaneOverlap = 0.28f;
 
 float clamp_delta_seconds(uint32_t elapsed_ms)
 {
@@ -34,8 +36,16 @@ void AppRacer::onOpen()
     _distance = 0.0f;
     _player_x = 0.0f;
     _speed = 0.0f;
+    _imu_data = {};
+    _imu_steering = 0.0f;
+    _imu_sample_available = false;
     _steer_left_held = false;
     _steer_right_held = false;
+    _collision_cooldown = 0.0f;
+    _engine_audio_elapsed = 0.0f;
+    reset_traffic();
+
+    GetHAL().imu.begin();
     _last_update_ms = GetHAL().millis();
     _last_render_ms = 0;
 
@@ -86,11 +96,42 @@ void AppRacer::handle_key_event(const Keyboard::KeyEvent_t& keyEvent)
     }
 }
 
+void AppRacer::reset_traffic()
+{
+    _traffic = {
+        TrafficCar{360.0f, -0.58f, 150.0f, TFT_CYAN},
+        TrafficCar{690.0f, 0.00f, 190.0f, TFT_BLUE},
+        TrafficCar{1040.0f, 0.58f, 215.0f, TFT_ORANGE},
+        TrafficCar{1430.0f, -0.24f, 175.0f, TFT_YELLOW},
+    };
+}
+
+void AppRacer::update_imu()
+{
+    if (!GetHAL().imu.update()) {
+        return;
+    }
+
+    _imu_data = GetHAL().imu.getImuData();
+
+    // Match app_imu's Cardputer orientation mapping: accel.x is scaled to a
+    // small screen offset and then sign-flipped for the display orientation.
+    int tilt_offset_x = std::clamp(static_cast<int>(_imu_data.accel.x * 15.0f), -15, 15);
+    tilt_offset_x = -tilt_offset_x;
+    _imu_steering = static_cast<float>(tilt_offset_x) / 15.0f;
+    _imu_sample_available = true;
+}
+
 void AppRacer::update(float dt)
 {
+    update_imu();
+
     _speed += (kMaxSpeed - _speed) * std::min(1.0f, dt * 1.8f);
 
-    const float steeringInput = static_cast<float>(_steer_right_held) - static_cast<float>(_steer_left_held);
+    const float keyboardSteering = static_cast<float>(_steer_right_held) -
+                                   static_cast<float>(_steer_left_held);
+    const float tiltSteering = _imu_sample_available ? _imu_steering * 0.85f : 0.0f;
+    const float steeringInput = std::clamp(keyboardSteering + tiltSteering, -1.0f, 1.0f);
     const float steeringRate = 1.0f + (_speed / kMaxSpeed) * 1.8f;
     _player_x += steeringInput * steeringRate * dt;
 
@@ -100,13 +141,57 @@ void AppRacer::update(float dt)
     _player_x = std::clamp(_player_x, -1.0f, 1.0f);
 
     _distance += _speed * dt;
-    if (_distance >= _track.length()) {
-        _distance = std::fmod(_distance, _track.length());
+    update_traffic(dt);
+    update_audio(dt);
+}
+
+void AppRacer::update_traffic(float dt)
+{
+    for (TrafficCar& car : _traffic) {
+        car.distance += car.speed * dt;
     }
+
+    _collision_cooldown = std::max(0.0f, _collision_cooldown - dt);
+    if (_collision_cooldown > 0.0f) {
+        return;
+    }
+
+    for (TrafficCar& car : _traffic) {
+        const float relativeDistance = _track.forwardDistance(_distance, car.distance);
+        const float laneDistance = std::abs(car.lane - _player_x);
+        if (relativeDistance <= 1.0f || relativeDistance > kCollisionDistance ||
+            laneDistance > kCollisionLaneOverlap) {
+            continue;
+        }
+
+        _speed *= 0.30f;
+        _collision_cooldown = 0.8f;
+        car.distance = _distance + 120.0f;
+        if (!audio::is_quiet_mode()) {
+            audio::play_tone(180, 0.12);
+        }
+        break;
+    }
+}
+
+void AppRacer::update_audio(float dt)
+{
+    _engine_audio_elapsed += dt;
+    if (_engine_audio_elapsed < 0.12f) {
+        return;
+    }
+    _engine_audio_elapsed = 0.0f;
+
+    if (_speed < 8.0f || audio::is_quiet_mode()) {
+        return;
+    }
+
+    const int frequency = 220 + static_cast<int>((_speed / kMaxSpeed) * 320.0f);
+    audio::play_tone(frequency, 0.035);
 }
 
 void AppRacer::render()
 {
-    _renderer.render(_track, _distance, _player_x, _speed);
+    _renderer.render(_track, _distance, _player_x, _speed, _traffic);
     GetHAL().pushCanvas();
 }

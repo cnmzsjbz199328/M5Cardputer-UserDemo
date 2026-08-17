@@ -22,7 +22,8 @@ int clamp_int(int value, int low, int high)
 
 } // namespace
 
-void RoadRenderer::render(const Track& track, float distance, float playerX, float speed)
+void RoadRenderer::render(const Track& track, float distance, float playerX, float speed,
+                          const std::vector<TrafficCar>& traffic)
 {
     auto& canvas = GetHAL().canvas;
     const int width = canvas.width();
@@ -36,6 +37,7 @@ void RoadRenderer::render(const Track& track, float distance, float playerX, flo
     const float segmentPosition = std::fmod(distance, Track::kSegmentLength);
     const std::size_t currentSegment =
         static_cast<std::size_t>(std::floor(distance / Track::kSegmentLength));
+    const float cameraY = track.heightAtDistance(distance);
 
     float curveOffset = 0.0f;
     float curveVelocity = 0.0f;
@@ -51,13 +53,59 @@ void RoadRenderer::render(const Track& track, float distance, float playerX, flo
         const float z = std::max(1.0f, (static_cast<float>(i) + 1.0f) * Track::kSegmentLength - segmentPosition);
         const float scale = kCameraDepth / z;
 
-        projections[i].y = std::min(static_cast<float>(height), horizon + kCameraHeight * scale);
+        const float segmentY = track.heightAtDistance(distance + z);
+        projections[i].y = std::min(static_cast<float>(height),
+                                     horizon + (kCameraHeight + cameraY - segmentY) * scale);
         projections[i].center = static_cast<float>(width) * 0.5f + curveOffset * scale * kRoadHalfWidth;
         projections[i].roadHalfWidth = scale * kRoadHalfWidth;
         projections[i].trackIndex = trackIndex;
     }
 
-    // Painter's algorithm: distant bands first, closest band last.
+    std::vector<TrafficProjection> trafficProjections;
+    trafficProjections.reserve(traffic.size());
+
+    const float maxVisibleZ = static_cast<float>(kDrawDistance) * Track::kSegmentLength - segmentPosition;
+    for (const TrafficCar& car : traffic) {
+        const float z = track.forwardDistance(distance, car.distance);
+        if (z < 1.0f || z >= maxVisibleZ) {
+            continue;
+        }
+
+        const int slot = static_cast<int>(std::floor((z + segmentPosition) / Track::kSegmentLength));
+        if (slot < 0 || slot >= kDrawDistance) {
+            continue;
+        }
+
+        const Projection nearEdge = slot == 0
+                                         ? Projection{static_cast<float>(height),
+                                                       static_cast<float>(width) * 0.5f,
+                                                       projections[0].roadHalfWidth * 1.2f,
+                                                       currentSegment}
+                                         : projections[slot - 1];
+        const Projection& farEdge = projections[slot];
+        const float nearZ = slot == 0 ? 0.0f : static_cast<float>(slot) * Track::kSegmentLength - segmentPosition;
+        const float farZ = static_cast<float>(slot + 1) * Track::kSegmentLength - segmentPosition;
+        const float t = std::clamp((z - nearZ) / std::max(0.001f, farZ - nearZ), 0.0f, 1.0f);
+
+        TrafficProjection projection;
+        projection.z = z;
+        projection.y = nearEdge.y + (farEdge.y - nearEdge.y) * t;
+        projection.center = nearEdge.center + (farEdge.center - nearEdge.center) * t +
+                            car.lane * (nearEdge.roadHalfWidth +
+                                        (farEdge.roadHalfWidth - nearEdge.roadHalfWidth) * t) * 0.72f;
+        projection.roadHalfWidth = nearEdge.roadHalfWidth +
+                                   (farEdge.roadHalfWidth - nearEdge.roadHalfWidth) * t;
+        projection.scale = kCameraDepth / std::max(1.0f, z);
+        projection.segmentSlot = slot;
+        projection.color = car.color;
+        trafficProjections.push_back(projection);
+    }
+
+    std::sort(trafficProjections.begin(), trafficProjections.end(),
+              [](const TrafficProjection& lhs, const TrafficProjection& rhs) { return lhs.z > rhs.z; });
+
+    // Painter's algorithm: distant bands first, closest band last. Traffic is
+    // emitted with its road segment so it follows the same depth ordering.
     for (int i = kDrawDistance - 1; i >= 0; --i) {
         const Projection& farEdge = projections[i];
         const Projection nearEdge = i == 0
@@ -69,15 +117,43 @@ void RoadRenderer::render(const Track& track, float distance, float playerX, flo
 
         drawBand(farEdge, nearEdge, width, height, (farEdge.trackIndex & 1U) == 0U,
                  (farEdge.trackIndex & 1U) != 0U, (farEdge.trackIndex & 1U) == 0U);
+        for (const TrafficProjection& projection : trafficProjections) {
+            if (projection.segmentSlot == i) {
+                drawTrafficCar(projection);
+            }
+        }
     }
 
     drawPlayerCar(width, height, playerX);
 
-    char speedLabel[20] = {};
-    std::snprintf(speedLabel, sizeof(speedLabel), "SPD %03d", static_cast<int>(speed));
+    const float lapDistance = std::fmod(std::max(0.0f, distance), track.length());
+    const int lap = static_cast<int>(std::floor(std::max(0.0f, distance) / track.length())) + 1;
+    const int segment = static_cast<int>(lapDistance / Track::kSegmentLength) + 1;
+    char speedLabel[48] = {};
+    std::snprintf(speedLabel, sizeof(speedLabel), "L%02d S%03d SPD%03d", lap, segment,
+                  static_cast<int>(speed));
     canvas.setTextSize(1);
     canvas.setTextColor(TFT_WHITE, TFT_BLACK);
     canvas.drawString(speedLabel, 3, 2);
+}
+
+void RoadRenderer::drawTrafficCar(const TrafficProjection& projection)
+{
+    auto& canvas = GetHAL().canvas;
+    const float size = std::clamp(projection.scale / (kCameraDepth / 20.0f), 0.18f, 1.0f);
+    const int halfWidth = std::max(2, static_cast<int>(std::lround(7.0f * size)));
+    const int bodyHeight = std::max(3, static_cast<int>(std::lround(9.0f * size)));
+    const int centerX = static_cast<int>(std::lround(projection.center));
+    const int bottomY = static_cast<int>(std::lround(projection.y));
+    const uint32_t color = projection.color == 0 ? TFT_CYAN : projection.color;
+
+    canvas.fillRect(centerX - halfWidth, bottomY - bodyHeight, halfWidth * 2 + 1, bodyHeight, color);
+    if (size > 0.35f) {
+        const int cabinWidth = std::max(2, halfWidth - 2);
+        const int cabinHeight = std::max(2, bodyHeight / 2);
+        canvas.fillRect(centerX - cabinWidth, bottomY - bodyHeight - cabinHeight + 1,
+                        cabinWidth * 2 + 1, cabinHeight, TFT_BLACK);
+    }
 }
 
 void RoadRenderer::drawBand(const Projection& farEdge, const Projection& nearEdge, int width, int height,
