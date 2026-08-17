@@ -4,7 +4,6 @@
  * SPDX-License-Identifier: MIT
  */
 #include "app_time_machine.h"
-#include "embedded_stories.h"
 #include <apps/utils/audio/audio.h>
 #include <apps/utils/common.h>
 #include <apps/utils/theme.h>
@@ -18,6 +17,7 @@
 #include <cstdio>
 #include <cstring>
 #include <dirent.h>
+#include <functional>
 #include <string>
 #include <sys/stat.h>
 
@@ -26,11 +26,24 @@ using namespace mooncake;
 namespace {
 
 constexpr uint32_t kRenderIntervalMs = 33;
-constexpr const char* kSdAppsRoot = "/sdcard/apps";
-constexpr const char* kStoryRoot = "/sdcard/apps/time_machine";
+constexpr const char* kStoryRoots[] = {
+    // FATFS may expose the long directory name as its 8.3 short name when
+    // long-file-name support is unavailable.  Windows shows this directory
+    // as "time_machine", while the Cardputer currently enumerates TIME_M~1.
+    "/sdcard/APPS/TIME_M~1",
+    "/sdcard/APPS/time_machine",
+    "/sdcard/apps/time_machine",
+};
 constexpr const char* kStoryFileName = "story.json";
 uint16_t image_data_time_machine_big[56 * 56];
 uint16_t image_data_time_machine_small[40 * 40];
+
+bool is_story_file_name(const char* name)
+{
+    if (!name || strncasecmp(name, "story", 5) != 0) return false;
+    const char* dot = std::strrchr(name, '.');
+    return dot && (strcasecmp(dot, ".json") == 0 || strcasecmp(dot, ".jso") == 0);
+}
 
 float clampf(float v, float lo, float hi)
 {
@@ -143,12 +156,6 @@ void ensure_launcher_icons()
     built = true;
 }
 
-bool ensure_dir(const char* path)
-{
-    if (mkdir(path, 0775) == 0) return true;
-    return errno == EEXIST;
-}
-
 }  // namespace
 
 AppTimeMachine::AppTimeMachine()
@@ -167,7 +174,6 @@ void AppTimeMachine::onOpen()
 {
     mclog::tagInfo(getAppInfo().name, "on open");
 
-    seed_story_library();
     scan_story_library();
     if (!_stories.empty()) {
         open_selected_story(false);
@@ -224,22 +230,62 @@ void AppTimeMachine::scan_story_library()
         return;
     }
 
-    DIR* root = opendir(kStoryRoot);
+    const char* storyRoot = nullptr;
+    DIR* root = nullptr;
+    int rootError = ENOENT;
+    for (const char* candidate : kStoryRoots) {
+        root = opendir(candidate);
+        if (root) {
+            storyRoot = candidate;
+            break;
+        }
+        rootError = errno;
+    }
     if (!root) {
-        mclog::tagWarn(getAppInfo().name, "story root not found");
+        mclog::tagWarn(getAppInfo().name, "story root not found: {}", std::strerror(rootError));
         return;
     }
 
     while (dirent* entry = readdir(root)) {
         if (entry->d_name[0] == '.') continue;
 
-        const std::string storyPath = std::string(kStoryRoot) + "/" + entry->d_name + "/" + kStoryFileName;
+        const std::string storyPath = std::string(storyRoot) + "/" + entry->d_name + "/" + kStoryFileName;
         StoryData story;
-        if (!load_story_from_path(storyPath, story)) continue;
+        if (!load_story_from_path(storyPath, story)) {
+            mclog::tagWarn(getAppInfo().name, "unable to load {}", storyPath);
+            continue;
+        }
 
         _stories.push_back({story.title, story.symbol, storyPath});
     }
     closedir(root);
+
+    // Be tolerant of cards prepared by a PC file manager that places files
+    // one level deeper or reports directory entries inconsistently.
+    if (_stories.empty()) {
+        std::function<void(const std::string&, int)> walk = [&](const std::string& dir, int depth) {
+            if (depth > 3) return;
+            DIR* current = opendir(dir.c_str());
+            if (!current) return;
+            while (dirent* entry = readdir(current)) {
+                if (entry->d_name[0] == '.') continue;
+                const std::string path = dir + "/" + entry->d_name;
+                // FATFS can return the 8.3 spelling in upper case even when
+                // the PC created a lower-case long name (for example
+                // STORY.JSON versus story.json).
+                if (is_story_file_name(entry->d_name)) {
+                    StoryData story;
+                    if (load_story_from_path(path, story)) {
+                        _stories.push_back({story.title, story.symbol, path});
+                    }
+                } else {
+                    walk(path, depth + 1);
+                }
+            }
+            closedir(current);
+        };
+        walk(storyRoot, 0);
+    }
 
     std::sort(_stories.begin(), _stories.end(), [](const StoryEntry& a, const StoryEntry& b) {
         return a.symbol < b.symbol;
@@ -247,51 +293,20 @@ void AppTimeMachine::scan_story_library()
     mclog::tagInfo(getAppInfo().name, "found {} stories", _stories.size());
 }
 
-void AppTimeMachine::seed_story_library()
-{
-    const auto probe = GetHAL().sdCardProbe();
-    if (!probe.is_mounted) return;
-
-    if (!ensure_dir(kSdAppsRoot) || !ensure_dir(kStoryRoot)) {
-        mclog::tagWarn(getAppInfo().name, "failed to create story root");
-        return;
-    }
-
-    for (const auto& story : kEmbeddedStoryFiles) {
-        const std::string folderPath = std::string(kStoryRoot) + "/" + story.folder;
-        const std::string storyPath = folderPath + "/" + kStoryFileName;
-        if (!ensure_dir(folderPath.c_str())) continue;
-
-        FILE* existing = std::fopen(storyPath.c_str(), "rb");
-        if (existing) {
-            std::fclose(existing);
-            continue;
-        }
-
-        FILE* fp = std::fopen(storyPath.c_str(), "wb");
-        if (!fp) {
-            mclog::tagWarn(getAppInfo().name, "failed to write {}", storyPath);
-            continue;
-        }
-        const size_t len = std::strlen(story.json);
-        const size_t written = std::fwrite(story.json, 1, len, fp);
-        std::fclose(fp);
-        if (written != len) {
-            mclog::tagWarn(getAppInfo().name, "short write {}", storyPath);
-        }
-    }
-}
-
-bool AppTimeMachine::load_story_from_path(const std::string& path, StoryData& story) const
+bool AppTimeMachine::load_story_from_path(const std::string& path, StoryData& story)
 {
     FILE* fp = std::fopen(path.c_str(), "rb");
-    if (!fp) return false;
+    if (!fp) {
+        mclog::tagWarn(getAppInfo().name, "open failed {}: {}", path, std::strerror(errno));
+        return false;
+    }
 
     std::fseek(fp, 0, SEEK_END);
     const long size = std::ftell(fp);
     std::rewind(fp);
     if (size <= 0 || size > 16384) {
         std::fclose(fp);
+        mclog::tagWarn(getAppInfo().name, "invalid size {} ({})", path, size);
         return false;
     }
 
@@ -299,9 +314,15 @@ bool AppTimeMachine::load_story_from_path(const std::string& path, StoryData& st
     json.resize(static_cast<size_t>(size));
     const size_t bytesRead = std::fread(json.data(), 1, json.size(), fp);
     std::fclose(fp);
-    if (bytesRead != json.size()) return false;
+    if (bytesRead != json.size()) {
+        mclog::tagWarn(getAppInfo().name, "short read {} ({}/{})", path, bytesRead, json.size());
+        return false;
+    }
 
-    if (!parse_story_json(json.c_str(), story)) return false;
+    if (!parse_story_json(json.c_str(), story)) {
+        mclog::tagWarn(getAppInfo().name, "JSON validation failed {}", path);
+        return false;
+    }
     story.path = path;
     story.loadedFromSd = true;
     return true;
@@ -322,6 +343,11 @@ bool AppTimeMachine::open_selected_story(bool startPlaying)
     _story = selected;
     _series.clear();
     build_series();
+    if (_series.size() < 2) {
+        mclog::tagWarn(getAppInfo().name, "story produced no usable series: {}", selected.path);
+        _story = StoryData{};
+        return false;
+    }
     reset_playback(startPlaying);
     return true;
 }
@@ -386,7 +412,10 @@ bool AppTimeMachine::parse_story_json(const char* json, StoryData& story) const
 
 bool AppTimeMachine::validate_story(StoryData& story) const
 {
-    if (story.anchors.size() < 2) return false;
+    // Keep untrusted SD-card data from causing unbounded allocations or
+    // non-finite drawing math on the device.
+    constexpr size_t kMaxAnchors = 128;
+    if (story.anchors.size() < 2 || story.anchors.size() > kMaxAnchors) return false;
 
     std::sort(story.anchors.begin(), story.anchors.end(), [](const Anchor& a, const Anchor& b) {
         return a.year < b.year;
@@ -396,7 +425,9 @@ bool AppTimeMachine::validate_story(StoryData& story) const
     });
 
     for (size_t i = 0; i < story.anchors.size(); ++i) {
-        if (story.anchors[i].price <= 0.0f) return false;
+        if (!std::isfinite(story.anchors[i].year) || !std::isfinite(story.anchors[i].price) ||
+            story.anchors[i].price <= 0.0f || story.anchors[i].year < 1900.0f || story.anchors[i].year > 2200.0f)
+            return false;
         if (i > 0 && story.anchors[i].year <= story.anchors[i - 1].year) return false;
     }
 
@@ -420,7 +451,12 @@ void AppTimeMachine::build_series()
     for (size_t i = 0; i + 1 < count; ++i) {
         const Anchor& a = _story.anchors[i];
         const Anchor& b = _story.anchors[i + 1];
-        const int steps = std::max(4, static_cast<int>(std::round((b.year - a.year) * 7.0f)));
+        const float span = b.year - a.year;
+        if (!std::isfinite(span) || span <= 0.0f || span > 300.0f) {
+            _series.clear();
+            return;
+        }
+        const int steps = std::min(4096, std::max(4, static_cast<int>(std::round(span * 7.0f))));
         const float logA = std::log(a.price);
         const float logB = std::log(b.price);
         const float amp = 0.5f * std::abs(logB - logA) + 0.05f;
@@ -573,7 +609,7 @@ void AppTimeMachine::render_empty_library()
     canvas.setTextColor(TFT_LIGHTGREY, THEME_COLOR_BG);
     canvas.drawCenterString("No stories on SD", w / 2, 75);
     canvas.setTextColor(TFT_DARKGREY, THEME_COLOR_BG);
-    canvas.drawCenterString("/sdcard/apps/time_machine", w / 2, 98);
+    canvas.drawCenterString("/sdcard/APPS/time_machine", w / 2, 98);
     canvas.drawCenterString("Enter rescan   ` back", w / 2, h - 15);
     GetHAL().pushCanvas();
 }
@@ -655,6 +691,10 @@ void AppTimeMachine::render_transition()
     auto& canvas = GetHAL().canvas;
     const int w = canvas.width();
     const int h = canvas.height();
+    if (_series.empty()) {
+        render_library();
+        return;
+    }
     const float finalPrice = price_at_year(_story.endYear);
     const float value = _story.initialInvestment * (finalPrice / _story.startPrice);
     const float pct = (value / _story.initialInvestment - 1.0f) * 100.0f;
@@ -680,6 +720,10 @@ void AppTimeMachine::render_summary()
     auto& canvas = GetHAL().canvas;
     const int w = canvas.width();
 
+    if (_series.empty()) {
+        render_library();
+        return;
+    }
     const float finalPrice = price_at_year(_story.endYear);
     const float value = _story.initialInvestment * (finalPrice / _story.startPrice);
     const float pct = (value / _story.initialInvestment - 1.0f) * 100.0f;
@@ -761,6 +805,7 @@ void AppTimeMachine::draw_live_chart(int x, int y, int w, int h, const char* moo
 void AppTimeMachine::draw_transition_chart(int x, int y, int w, int h, float progress)
 {
     auto& canvas = GetHAL().canvas;
+    if (_series.empty()) return;
     const float eased = progress * progress * (3.0f - 2.0f * progress);
     const float exitLeft = _exit_camera.centerYear - _exit_camera.yearWindow * 0.5f;
     const float exitRight = _exit_camera.centerYear + _exit_camera.yearWindow * 0.5f;
@@ -800,6 +845,7 @@ void AppTimeMachine::draw_transition_chart(int x, int y, int w, int h, float pro
 void AppTimeMachine::draw_summary_chart(int x, int y, int w, int h)
 {
     auto& canvas = GetHAL().canvas;
+    if (_series.empty()) return;
     float minPrice = _series.front().price;
     float maxPrice = _series.front().price;
     for (const auto& p : _series) {

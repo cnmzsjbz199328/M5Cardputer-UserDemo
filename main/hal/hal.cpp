@@ -701,10 +701,13 @@ void Hal::spi_init()
 #include <driver/sdmmc_host.h>
 #include <sdmmc_cmd.h>
 #include <esp_vfs_fat.h>
+#include <cstdlib>
 
 #define MOUNT_POINT "/sdcard"
 
 static sdmmc_card_t* _sd_card = nullptr;
+static sdspi_dev_handle_t _msc_sd_slot = -1;
+static sdmmc_host_t _msc_sd_host = SDSPI_HOST_DEFAULT();
 
 void Hal::sd_card_init()
 {
@@ -763,6 +766,12 @@ Hal::SdCardProbeResult_t Hal::sdCardProbe()
 {
     SdCardProbeResult_t result;
 
+    if (_sd_card_usb_export) {
+        result.size = "USB Disk Mode";
+        result.type = "SD card owned by USB host";
+        return result;
+    }
+
     if (!_is_sd_card_mounted) {
         sd_card_init();
         if (!_is_sd_card_mounted) {
@@ -799,4 +808,114 @@ Hal::SdCardProbeResult_t Hal::sdCardProbe()
     result.name = fmt::format("Name: {}", std::string(_sd_card->cid.name));
 
     return result;
+}
+
+bool Hal::sdCardEnableUsbExport()
+{
+    if (_sd_card_usb_export) return true;
+
+    // The raw SDSPI card handle and the TinyUSB MSC storage class can only be
+    // set up once (tinyusb_msc_storage_init_sdmmc() asserts if called again
+    // while a storage handle already exists). Do that one-time setup only on
+    // the first export; later toggles just hand the existing storage to the
+    // host via tusb_hid_device_helper_init_msc() below.
+    if (!_sd_card_msc_ready) {
+        sd_card_init();
+        if (!_is_sd_card_mounted || _sd_card == nullptr) {
+            mclog::tagError(_tag, "cannot enable USB disk: SD card is not mounted");
+            return false;
+        }
+
+        // Release the POSIX/FAT mount before handing the media to MSC. The unmount
+        // also releases the old card handle, so initialize a fresh raw card handle
+        // for TinyUSB.
+        if (esp_vfs_fat_sdcard_unmount(MOUNT_POINT, _sd_card) != ESP_OK) {
+            mclog::tagError(_tag, "cannot enable USB disk: SD unmount failed");
+            return false;
+        }
+        _sd_card = nullptr;
+        _is_sd_card_mounted = false;
+
+        // The host must be initialized before a device can be attached to it.
+        _msc_sd_host = SDSPI_HOST_DEFAULT();
+        if (_msc_sd_host.init() != ESP_OK) {
+            mclog::tagError(_tag, "cannot enable USB disk: SDSPI host init failed");
+            return false;
+        }
+
+        sdspi_device_config_t slot_config = SDSPI_DEVICE_CONFIG_DEFAULT();
+        slot_config.gpio_cs = HAL_PIN_SD_CARD_CS;
+        slot_config.host_id = (spi_host_device_t)_msc_sd_host.slot;
+        if (sdspi_host_init_device(&slot_config, &_msc_sd_slot) != ESP_OK) {
+            mclog::tagError(_tag, "cannot enable USB disk: SDSPI device init failed");
+            _msc_sd_host.deinit();
+            return false;
+        }
+        _msc_sd_host.slot = _msc_sd_slot;
+        _sd_card = static_cast<sdmmc_card_t*>(std::calloc(1, sizeof(sdmmc_card_t)));
+        if (_sd_card == nullptr || sdmmc_card_init(&_msc_sd_host, _sd_card) != ESP_OK) {
+            mclog::tagError(_tag, "cannot enable USB disk: raw SD init failed");
+            sdspi_host_remove_device(_msc_sd_slot);
+            _msc_sd_host.deinit();
+            std::free(_sd_card);
+            _sd_card = nullptr;
+            return false;
+        }
+
+        _sd_card_msc_ready = true;
+    }
+
+    if (!tusb_hid_device_helper_init_msc(_sd_card)) {
+        mclog::tagError(_tag, "cannot enable USB disk: TinyUSB MSC init failed");
+        return false;
+    }
+
+    _sd_card_usb_export = true;
+    mclog::tagInfo(_tag, "USB disk mode enabled");
+    return true;
+}
+
+bool Hal::sdCardDisableUsbExport()
+{
+    if (!_sd_card_usb_export) return _is_sd_card_mounted;
+
+    if (!tusb_hid_device_helper_eject_msc()) {
+        mclog::tagError(_tag, "cannot leave USB disk mode: eject failed");
+        return false;
+    }
+
+    tusb_hid_device_helper_stop_msc();
+    if (_msc_sd_slot >= 0) {
+        sdspi_host_remove_device(_msc_sd_slot);
+        _msc_sd_slot = -1;
+    }
+    _msc_sd_host.deinit();
+    std::free(_sd_card);
+    _sd_card = nullptr;
+    _sd_card_msc_ready = false;
+    _sd_card_usb_export = false;
+    _is_sd_card_mounted = false;
+    sd_card_init();
+    if (!_is_sd_card_mounted) {
+        mclog::tagError(_tag, "USB disk returned but SD remount failed");
+        return false;
+    }
+    mclog::tagInfo(_tag, "USB disk mode disabled");
+    return true;
+}
+
+extern "C" void hal_usb_msc_mount_changed(bool is_mounted)
+{
+    GetHAL().onUsbMscMountChanged(is_mounted);
+}
+
+void Hal::onUsbMscMountChanged(bool is_mounted)
+{
+    _sd_card_usb_export = !is_mounted;
+    _is_sd_card_mounted = is_mounted;
+    if (is_mounted) {
+        mclog::tagInfo(_tag, "USB disk ejected; SD card returned to firmware");
+    } else {
+        mclog::tagInfo(_tag, "SD card is owned by USB host");
+    }
 }

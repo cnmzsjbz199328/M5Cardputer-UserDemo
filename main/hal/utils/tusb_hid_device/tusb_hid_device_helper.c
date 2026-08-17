@@ -11,15 +11,27 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "tinyusb.h"
+#include "tusb_msc_storage.h"
 #include "class/hid/hid_device.h"
+#include "class/msc/msc_device.h"
 #include "driver/gpio.h"
 
 #define APP_BUTTON (GPIO_NUM_0)  // Use BOOT signal by default
 static const char *TAG = "tusb_hid";
+static bool s_msc_initialized = false;
+
+extern void hal_usb_msc_mount_changed(bool is_mounted);
+
+static void msc_mount_changed_cb(tinyusb_msc_event_t *event)
+{
+    if (event != NULL && event->type == TINYUSB_MSC_EVENT_MOUNT_CHANGED) {
+        hal_usb_msc_mount_changed(event->mount_changed_data.is_mounted);
+    }
+}
 
 /************* TinyUSB descriptors ****************/
 
-#define TUSB_DESC_TOTAL_LEN (TUD_CONFIG_DESC_LEN + CFG_TUD_HID * TUD_HID_DESC_LEN)
+#define TUSB_DESC_TOTAL_LEN (TUD_CONFIG_DESC_LEN + TUD_HID_DESC_LEN + TUD_MSC_DESC_LEN)
 
 /**
  * @brief HID report descriptor
@@ -33,13 +45,14 @@ const uint8_t hid_report_descriptor[] = {TUD_HID_REPORT_DESC_KEYBOARD(HID_REPORT
 /**
  * @brief String descriptor
  */
-const char *hid_string_descriptor[5] = {
+const char *hid_string_descriptor[6] = {
     // array of pointer to string descriptors
     (char[]){0x09, 0x04},     // 0: is supported language is English (0x0409)
     "M5Stack",                // 1: Manufacturer
     "CardputerADV",           // 2: Product
     "123456",                 // 3: Serials, should use chip ID
-    "Example HID interface",  // 4: HID
+    "HID + SD Card",          // 4: HID
+    "SD Card MSC",            // 5: MSC
 };
 
 /**
@@ -49,10 +62,11 @@ const char *hid_string_descriptor[5] = {
  */
 static const uint8_t hid_configuration_descriptor[] = {
     // Configuration number, interface count, string index, total length, attribute, power in mA
-    TUD_CONFIG_DESCRIPTOR(1, 1, 0, TUSB_DESC_TOTAL_LEN, TUSB_DESC_CONFIG_ATT_REMOTE_WAKEUP, 100),
+    TUD_CONFIG_DESCRIPTOR(1, 2, 0, TUSB_DESC_TOTAL_LEN, TUSB_DESC_CONFIG_ATT_REMOTE_WAKEUP, 100),
 
     // Interface number, string index, boot protocol, report descriptor len, EP In address, size & polling interval
     TUD_HID_DESCRIPTOR(0, 4, false, sizeof(hid_report_descriptor), 0x81, 16, 10),
+    TUD_MSC_DESCRIPTOR(1, 5, 0x02, 0x83, 64),
 };
 
 /********* TinyUSB HID callbacks ***************/
@@ -155,8 +169,18 @@ static void app_send_hid_demo(void)
 }
 #endif
 
-static void _demo_app_main(void)
+static bool s_driver_installed = false;
+
+// Installs the TinyUSB device stack. TinyUSB can only be installed once for
+// the lifetime of the firmware (a second call to tinyusb_driver_install()
+// re-acquires the USB PHY/OTG peripheral and the TinyUSB task while they are
+// already owned by the first install, which fails outright). Callers must
+// therefore always route through this guarded helper instead of calling
+// tinyusb_driver_install() directly.
+static bool _install_driver(void)
 {
+    if (s_driver_installed) return true;
+
     // // Initialize button that will trigger HID reports
     // const gpio_config_t boot_button_config = {
     //     .pin_bit_mask = BIT64(APP_BUTTON),
@@ -183,8 +207,14 @@ static void _demo_app_main(void)
 #endif  // TUD_OPT_HIGH_SPEED
     };
 
-    ESP_ERROR_CHECK(tinyusb_driver_install(&tusb_cfg));
+    esp_err_t err = tinyusb_driver_install(&tusb_cfg);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "USB initialization failed: %s", esp_err_to_name(err));
+        return false;
+    }
+    s_driver_installed = true;
     ESP_LOGI(TAG, "USB initialization DONE");
+    return true;
 
     // while (1) {
     //     if (tud_mounted()) {
@@ -200,7 +230,65 @@ static void _demo_app_main(void)
 
 void tusb_hid_device_helper_init(void)
 {
-    _demo_app_main();
+    (void)_install_driver();
+}
+
+bool tusb_hid_device_helper_init_msc(sdmmc_card_t *card)
+{
+    if (!_install_driver()) return false;
+
+    // tinyusb_msc_storage_init_sdmmc() asserts if called while a storage
+    // handle already exists, so it may only run once for the given card.
+    // Re-enabling USB export after an eject just hands the already
+    // registered storage back to the host.
+    if (!s_msc_initialized) {
+        const tinyusb_msc_sdmmc_config_t msc_cfg = {
+            .card = card,
+            .callback_mount_changed = msc_mount_changed_cb,
+            .callback_premount_changed = NULL,
+            .mount_config = {
+                .format_if_mount_failed = false,
+                .max_files = 5,
+                .allocation_unit_size = 16 * 1024,
+                .disk_status_check_enable = false,
+                .use_one_fat = false,
+            },
+        };
+        esp_err_t err = tinyusb_msc_storage_init_sdmmc(&msc_cfg);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "MSC storage init failed: %s", esp_err_to_name(err));
+            return false;
+        }
+        s_msc_initialized = true;
+    }
+
+    // Hand the storage to the USB host. tinyusb_msc_storage_mount() (used by
+    // the eject path) does the opposite: it claims the storage for the
+    // firmware and blocks host access, per its documented contract.
+    esp_err_t err = tinyusb_msc_storage_unmount();
+    if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
+        ESP_LOGE(TAG, "MSC unmount (hand to host) failed: %s", esp_err_to_name(err));
+        return false;
+    }
+    return true;
+}
+
+bool tusb_hid_device_helper_eject_msc(void)
+{
+    if (!s_msc_initialized) return false;
+    tud_disconnect();
+    for (int i = 0; i < 30 && tinyusb_msc_storage_in_use_by_usb_host(); ++i) {
+        vTaskDelay(pdMS_TO_TICKS(100));
+    }
+    return true;
+}
+
+void tusb_hid_device_helper_stop_msc(void)
+{
+    if (!s_msc_initialized) return;
+    (void)tinyusb_msc_storage_unmount();
+    tinyusb_msc_storage_deinit();
+    s_msc_initialized = false;
 }
 
 void tusb_hid_device_helper_report(uint8_t modifier, uint8_t *keycode)

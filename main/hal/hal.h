@@ -130,6 +130,13 @@ public:
     };
 
     SdCardProbeResult_t sdCardProbe();
+    bool sdCardEnableUsbExport();
+    bool sdCardDisableUsbExport();
+    void onUsbMscMountChanged(bool is_mounted);
+    bool sdCardUsbExportActive() const
+    {
+        return _sd_card_usb_export;
+    }
 
     /* ----------------------------------- Cap ---------------------------------- */
     CapLoRa868 capLora868;
@@ -143,6 +150,8 @@ private:
     bool _is_ble_keyboard_inited    = false;
     bool _is_usb_keyboard_inited    = false;
     bool _is_sd_card_mounted        = false;
+    bool _sd_card_usb_export        = false;
+    bool _sd_card_msc_ready         = false;
     int _ble_keyboard_event_slot_id = -1;
     int _usb_keyboard_event_slot_id = -1;
     std::unique_ptr<CapLoRa868> _cap_lora868;

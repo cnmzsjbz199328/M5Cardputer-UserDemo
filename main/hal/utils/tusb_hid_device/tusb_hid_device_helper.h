@@ -7,12 +7,16 @@
 #pragma once
 #include <stdint.h>
 #include <stdbool.h>
+#include "driver/sdmmc_types.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
 void tusb_hid_device_helper_init(void);
+bool tusb_hid_device_helper_init_msc(sdmmc_card_t *card);
+bool tusb_hid_device_helper_eject_msc(void);
+void tusb_hid_device_helper_stop_msc(void);
 void tusb_hid_device_helper_report(uint8_t modifier, uint8_t* keycode);
 bool tusb_hid_device_helper_is_mounted(void);
 

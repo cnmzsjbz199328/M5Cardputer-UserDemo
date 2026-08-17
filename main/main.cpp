@@ -35,6 +35,7 @@ extern "C" void app_main(void)
     GetMooncake().installApp(std::make_unique<AppKeyboard>());
     GetMooncake().installApp(std::make_unique<AppImu>());
     GetMooncake().installApp(std::make_unique<AppSdcard>());
+    GetMooncake().installApp(std::make_unique<AppSdDiag>());
     GetMooncake().installApp(std::make_unique<AppBleController>());
     GetMooncake().installApp(std::make_unique<AppTimeMachine>());
     // GetMooncake().installApp(std::make_unique<AppDummy>());

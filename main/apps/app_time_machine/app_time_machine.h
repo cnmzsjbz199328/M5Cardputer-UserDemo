@@ -87,8 +87,7 @@ private:
     ChartCamera _exit_camera;
 
     void scan_story_library();
-    void seed_story_library();
-    bool load_story_from_path(const std::string& path, StoryData& story) const;
+    bool load_story_from_path(const std::string& path, StoryData& story);
     bool open_selected_story(bool startPlaying);
     bool parse_story_json(const char* json, StoryData& story) const;
     bool validate_story(StoryData& story) const;
