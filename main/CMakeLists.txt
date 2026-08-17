@@ -16,6 +16,7 @@ set(MY_INCLUDE_DIRS
     "./apps/app_solar_system/core"
     "./apps/app_solar_system/data"
     "./apps/app_solar_system/render"
+    "./apps/app_racer"
     "../external/ecosystem_protocol"
 )
 

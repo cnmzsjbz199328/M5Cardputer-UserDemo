@@ -17,4 +17,5 @@
 #include "app_ble_controller/app_ble_controller.h"
 #include "app_time_machine/app_time_machine.h"
 #include "app_solar_system/app_solar_system.h"
+#include "app_racer/app_racer.h"
 #include "app_settings/app_settings.h"
