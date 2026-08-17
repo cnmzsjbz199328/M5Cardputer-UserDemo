@@ -10,7 +10,6 @@
 #include "app_wifi_scan/app_wifi_scan.h"
 #include "app_record/app_record.h"
 #include "app_repl/app_repl.h"
-#include "app_set_wifi/app_set_wifi.h"
 #include "app_clock/app_clock.h"
 #include "app_keyboard/app_keyboard.h"
 #include "app_imu/app_imu.h"

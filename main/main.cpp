@@ -31,7 +31,6 @@ extern "C" void app_main(void)
     GetMooncake().installApp(std::make_unique<AppWifiScan>());
     GetMooncake().installApp(std::make_unique<AppRecord>());
     GetMooncake().installApp(std::make_unique<AppREPL>());
-    GetMooncake().installApp(std::make_unique<AppSetWiFi>());
     GetMooncake().installApp(std::make_unique<AppClock>());
     GetMooncake().installApp(std::make_unique<AppKeyboard>());
     GetMooncake().installApp(std::make_unique<AppImu>());
