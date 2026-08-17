@@ -45,7 +45,13 @@ void Hal::update()
 {
     M5.update();
     if (homeButton.wasClicked()) {
+        const bool was_dimmed = _screen_dimmed;
         resetScreenIdleTimer();
+        if (was_dimmed) {
+            // Waking the screen shouldn't also trigger the app's own
+            // Home-button-closes-app handling in the same frame.
+            homeButton.setState(millis(), m5::Button_Class::state_nochange);
+        }
     }
     keyboard.update();
     capLora868.update();
