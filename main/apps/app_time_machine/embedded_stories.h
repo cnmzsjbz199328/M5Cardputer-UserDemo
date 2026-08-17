@@ -9,7 +9,7 @@ static const EmbeddedStoryFile kEmbeddedStoryFiles[] = {
     {
         "apple",
 R"story_json({
-  "title": "Apple Time Machine",
+  "title": "Apple",
   "symbol": "AAPL",
   "initialInvestment": 1000,
   "anchors": [
@@ -39,7 +39,7 @@ R"story_json({
     {
         "bitcoin",
 R"story_json({
-  "title": "Bitcoin Time Machine",
+  "title": "Bitcoin",
   "symbol": "BTC",
   "initialInvestment": 1000,
   "anchors": [
@@ -75,7 +75,7 @@ R"story_json({
     {
         "gamestop",
 R"story_json({
-  "title": "GameStop Time Machine",
+  "title": "GameStop",
   "symbol": "GME",
   "initialInvestment": 1000,
   "anchors": [
@@ -104,7 +104,7 @@ R"story_json({
     {
         "nvidia",
 R"story_json({
-  "title": "Nvidia Time Machine",
+  "title": "Nvidia",
   "symbol": "NVDA",
   "initialInvestment": 1000,
   "anchors": [
@@ -134,7 +134,7 @@ R"story_json({
     {
         "tesla",
 R"story_json({
-  "title": "Tesla Time Machine",
+  "title": "Tesla",
   "symbol": "TSLA",
   "initialInvestment": 1000,
   "anchors": [

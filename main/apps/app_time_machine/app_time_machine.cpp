@@ -161,7 +161,7 @@ void ensure_launcher_icons()
 AppTimeMachine::AppTimeMachine()
 {
     ensure_launcher_icons();
-    setAppInfo().name = "Time Machine";
+    setAppInfo().name = "Stocks";
     setAppInfo().userData = new AppIcon_t(image_data_time_machine_big, image_data_time_machine_small);
 }
 
@@ -173,6 +173,10 @@ AppTimeMachine::~AppTimeMachine()
 void AppTimeMachine::onOpen()
 {
     mclog::tagInfo(getAppInfo().name, "on open");
+
+    // SD-card story text is length-capped, but keep wrap off defensively so
+    // any long string clips instead of wrapping onto other UI elements.
+    GetHAL().canvas.setTextWrap(false);
 
     scan_story_library();
     if (!_stories.empty()) {
@@ -211,6 +215,7 @@ void AppTimeMachine::onRunning()
 void AppTimeMachine::onClose()
 {
     mclog::tagInfo(getAppInfo().name, "on close");
+    GetHAL().canvas.setTextWrap(true);
     if (_key_event_slot_id >= 0) {
         GetHAL().keyboard.onKeyEvent.disconnect(_key_event_slot_id);
         _key_event_slot_id = -1;
@@ -424,6 +429,11 @@ bool AppTimeMachine::validate_story(StoryData& story) const
         return a.year < b.year;
     });
 
+    constexpr size_t kMaxEventLabelLen = 12;
+    for (auto& event : story.events) {
+        if (event.label.size() > kMaxEventLabelLen) event.label.resize(kMaxEventLabelLen);
+    }
+
     for (size_t i = 0; i < story.anchors.size(); ++i) {
         if (!std::isfinite(story.anchors[i].year) || !std::isfinite(story.anchors[i].price) ||
             story.anchors[i].price <= 0.0f || story.anchors[i].year < 1900.0f || story.anchors[i].year > 2200.0f)
@@ -431,8 +441,15 @@ bool AppTimeMachine::validate_story(StoryData& story) const
         if (i > 0 && story.anchors[i].year <= story.anchors[i - 1].year) return false;
     }
 
+    // Cap lengths so SD-card-supplied text can never overflow the 204px
+    // canvas and wrap onto (and corrupt) neighboring UI elements.
+    constexpr size_t kMaxSymbolLen = 10;
+    constexpr size_t kMaxTitleLen = 24;
+    if (story.symbol.size() > kMaxSymbolLen) story.symbol.resize(kMaxSymbolLen);
+    if (story.title.size() > kMaxTitleLen) story.title.resize(kMaxTitleLen);
+
     if (story.symbol.empty()) story.symbol = "STORY";
-    if (story.title.empty()) story.title = story.symbol + " Time Machine";
+    if (story.title.empty()) story.title = story.symbol;
     if (story.initialInvestment <= 0.0f) story.initialInvestment = 1000.0f;
 
     story.startYear = story.anchors.front().year;
@@ -609,7 +626,7 @@ void AppTimeMachine::render_empty_library()
     canvas.setTextColor(TFT_LIGHTGREY, THEME_COLOR_BG);
     canvas.drawCenterString("No stories on SD", w / 2, 75);
     canvas.setTextColor(TFT_DARKGREY, THEME_COLOR_BG);
-    canvas.drawCenterString("/sdcard/APPS/time_machine", w / 2, 98);
+    canvas.drawCenterString("SD:/APPS/time_machine", w / 2, 98);
     canvas.drawCenterString("Enter rescan   ` back", w / 2, h - 15);
     GetHAL().pushCanvas();
 }
@@ -647,8 +664,11 @@ void AppTimeMachine::render_library()
         canvas.print(_stories[index].symbol.c_str());
         canvas.setTextColor(isSelected ? TFT_CYAN : TFT_DARKGREY, THEME_COLOR_BG);
         canvas.setCursor(72, y);
+        // FONT_BASIC (efontCN_16) is 8px/char; cap so titles never reach the
+        // canvas edge (w - 72 - 4px margin) and wrap onto the next row.
+        const size_t maxTitleChars = static_cast<size_t>(std::max(0, (w - 72 - 4) / 8));
         std::string title = _stories[index].title;
-        if (title.size() > 20) title = title.substr(0, 20);
+        if (title.size() > maxTitleChars) title = title.substr(0, maxTitleChars);
         canvas.print(title.c_str());
     }
 
@@ -732,7 +752,7 @@ void AppTimeMachine::render_summary()
     canvas.setTextSize(1);
     canvas.setTextColor(TFT_RED, THEME_COLOR_BG);
     canvas.setCursor(5, 2);
-    canvas.printf("%s FULL RUN", _story.symbol.c_str());
+    canvas.print(_story.symbol.c_str());
 
     draw_summary_chart(5, 18, w - 10, 52);
 
