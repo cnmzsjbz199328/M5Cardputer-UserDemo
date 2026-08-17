@@ -354,6 +354,11 @@ void Hal::wifiDisconnect()
     _is_wifi_connected = false;
 }
 
+static void sntp_sync_notification_cb(struct timeval* tv)
+{
+    mclog::tagInfo("hal", "sntp time synced: {}", tv->tv_sec);
+}
+
 void Hal::start_sntp()
 {
     mclog::tagInfo(_tag, "start sntp");
@@ -363,12 +368,13 @@ void Hal::start_sntp()
         return;
     }
 
-    // Set timezone to UTC (we don't know where this device is)
-    setenv("TZ", "UTC0", 1);
+    // Set timezone to Adelaide, Australia (ACST/ACDT with DST rules)
+    setenv("TZ", "ACST-9:30ACDT-10:30,M10.1.0,M4.1.0/3", 1);
     tzset();
 
     esp_sntp_setoperatingmode(SNTP_OPMODE_POLL);
     esp_sntp_setservername(0, "pool.ntp.org");
+    sntp_set_time_sync_notification_cb(sntp_sync_notification_cb);
     esp_sntp_init();
 }
 
