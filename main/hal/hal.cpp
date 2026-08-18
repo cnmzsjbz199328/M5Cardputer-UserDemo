@@ -145,7 +145,7 @@ void Hal::setting_init()
     _brightness = static_cast<uint8_t>(std::clamp<int32_t>(_settings->GetInt("brightness", 128), 0, 255));
     _volume     = static_cast<uint8_t>(std::clamp<int32_t>(_settings->GetInt("volume", audio::DEFAULT_VOLUME), 0, 255));
 
-    const int32_t screen_timeout = _settings->GetInt("screen_timeout_s", 0);
+    const int32_t screen_timeout = _settings->GetInt("screen_timeout", 300);
     if (screen_timeout <= 0) {
         _screen_timeout_sec = 0;
     } else {
@@ -179,7 +179,7 @@ void Hal::setScreenTimeoutSec(uint32_t seconds)
 {
     const auto max_timeout = std::numeric_limits<uint32_t>::max() / 1000;
     _screen_timeout_sec = std::min(seconds, max_timeout);
-    getSettings().SetInt("screen_timeout_s", static_cast<int32_t>(_screen_timeout_sec));
+    getSettings().SetInt("screen_timeout", static_cast<int32_t>(_screen_timeout_sec));
     getSettings().Commit();
     resetScreenIdleTimer();
 }

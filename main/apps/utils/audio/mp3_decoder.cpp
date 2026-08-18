@@ -48,7 +48,7 @@ bool play_mp3_file(const std::string& path, int channel)
     size_t buf_len = 0;
     bool file_eof  = false;
 
-    mp3dec_t mp3d;
+    static mp3dec_t mp3d;
     mp3dec_init(&mp3d);
     mp3dec_frame_info_t info;
     static int16_t pcm[MINIMP3_MAX_SAMPLES_PER_FRAME];

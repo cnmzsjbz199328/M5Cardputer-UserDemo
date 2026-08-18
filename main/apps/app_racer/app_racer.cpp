@@ -35,7 +35,7 @@ constexpr float kDriftDecayRate = 3.5f;
 constexpr float kDriftMinimumCharge = 0.30f;
 constexpr float kDriftBoostDuration = 1.0f;
 constexpr float kDriftBoostMultiplier = 1.18f;
-constexpr char kBestLapSetting[] = "racer_best_lap_ms";
+constexpr char kBestLapSetting[] = "racer_best_lap";
 
 float clamp_delta_seconds(uint32_t elapsed_ms)
 {
