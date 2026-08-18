@@ -74,6 +74,14 @@ void AppWifiScan::onClose()
     if (_key_event_slot_id >= 0) {
         GetHAL().keyboard.onKeyEvent.disconnect(_key_event_slot_id);
     }
+
+    // This app's job is scanning/testing a connection, not holding one open;
+    // any SSID/password worth keeping is already saved to settings by
+    // save_wifi_settings(). Tear the WiFi driver all the way down so its
+    // buffer pools (tens of KB, no PSRAM on this board) go back to the rest
+    // of the app instead of sitting idle. Apps that actually need WiFi (e.g.
+    // Clock) reconnect on demand from the saved credentials.
+    GetHAL().wifiDeinit();
 }
 
 void AppWifiScan::do_scan()

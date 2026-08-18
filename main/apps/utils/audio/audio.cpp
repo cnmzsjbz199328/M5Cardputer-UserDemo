@@ -9,6 +9,7 @@
 #include <cstdlib>
 #include <cstdint>
 #include <algorithm>
+#include <esp_heap_caps.h>
 #include <hal/hal.h>
 #include <mooncake_log.h>
 #include <random>
@@ -29,20 +30,47 @@ std::array<std::vector<int16_t>, kAudioBufferCount> melody_buffers;
 std::size_t tone_buffer_index = 0;
 std::size_t melody_buffer_index = 0;
 
-std::vector<int16_t>& acquire_tone_buffer(std::size_t sample_count)
+// This device's heap is small (a few hundred KB total) and WiFi/TLS use can
+// leave it deeply fragmented; a resize() here can genuinely fail to find a
+// large enough block. The project builds with -fno-exceptions, so a failed
+// allocation calls abort() directly rather than throwing — there is nothing
+// to catch. Check the largest free block up front instead and skip the
+// sound (audio is decorative, not essential) rather than crash the app.
+//
+// libstdc++'s vector growth policy does not just top up to `needed` when
+// growing: _M_check_len() picks size()+max(size(), extra), which can round
+// up to roughly double the buffer's PREVIOUS content size. That made an
+// earlier version of this check compare the heap against the wrong (much
+// smaller) number while the real resize() asked for far more and still
+// aborted. Force an exact allocation instead: drop the old capacity first
+// (free) so the resize below has no prior size to double against.
+std::vector<int16_t>* acquire_buffer(std::vector<int16_t>& buffer, std::size_t needed, const char* what)
+{
+    if (needed > buffer.capacity()) {
+        std::size_t needed_bytes = needed * sizeof(int16_t);
+        if (heap_caps_get_largest_free_block(MALLOC_CAP_8BIT) <= needed_bytes + 4096) {
+            mclog::tagWarn("audio", "{} buffer allocation would fail, skipping sound", what);
+            return nullptr;
+        }
+        buffer.clear();
+        buffer.shrink_to_fit();
+    }
+    buffer.resize(needed);
+    return &buffer;
+}
+
+std::vector<int16_t>* acquire_tone_buffer(std::size_t sample_count)
 {
     auto& buffer = tone_buffers[tone_buffer_index];
     tone_buffer_index = (tone_buffer_index + 1) % kAudioBufferCount;
-    buffer.resize(sample_count * 2);
-    return buffer;
+    return acquire_buffer(buffer, sample_count * 2, "tone");
 }
 
-std::vector<int16_t>& acquire_melody_buffer(std::size_t sample_count)
+std::vector<int16_t>* acquire_melody_buffer(std::size_t sample_count)
 {
     auto& buffer = melody_buffers[melody_buffer_index];
     melody_buffer_index = (melody_buffer_index + 1) % kAudioBufferCount;
-    buffer.resize(sample_count * 2);
-    return buffer;
+    return acquire_buffer(buffer, sample_count * 2, "melody");
 }
 
 }  // namespace
@@ -57,11 +85,18 @@ void play_tone(int frequency, double durationSec)
 
     const int sample_rate = GetHAL().speaker.config().sample_rate;
     const int samples     = static_cast<int>(sample_rate * durationSec);
-    std::vector<int16_t> buffer(samples * 2);  // 双声道
 
     const int fade_len    = 200;  // 淡出长度（采样点）
     const float amplitude = 32767.0f / 5;
 
+    // Write directly into the persistent (rotating) buffer instead of
+    // building a temporary vector and copying it in: with two full-size
+    // buffers briefly alive at once, that copy could fail to allocate under
+    // heap fragmentation (e.g. right after a WiFi/TLS session) and abort().
+    auto* buffer = acquire_tone_buffer(samples);
+    if (!buffer) {
+        return;
+    }
     for (int i = 0; i < samples; ++i) {
         float amp = amplitude;
 
@@ -71,14 +106,12 @@ void play_tone(int frequency, double durationSec)
             amp *= fade_factor;
         }
 
-        int16_t value     = static_cast<int16_t>(amp * sin(2.0 * M_PI * frequency * i / sample_rate));
-        buffer[i * 2]     = value;  // 左声道
-        buffer[i * 2 + 1] = value;  // 右声道
+        int16_t value        = static_cast<int16_t>(amp * sin(2.0 * M_PI * frequency * i / sample_rate));
+        (*buffer)[i * 2]     = value;  // 左声道
+        (*buffer)[i * 2 + 1] = value;  // 右声道
     }
 
-    auto& persistent_buffer = acquire_tone_buffer(buffer.size() / 2);
-    persistent_buffer = buffer;
-    GetHAL().speaker.playRaw(persistent_buffer.data(), persistent_buffer.size());
+    GetHAL().speaker.playRaw(buffer->data(), buffer->size());
 }
 
 void play_melody(const std::vector<int>& midiList, double durationSec)
@@ -92,8 +125,13 @@ void play_melody(const std::vector<int>& midiList, double durationSec)
     const int fade_len         = 200;  // 每个音符结尾的淡出长度
     const float amplitude      = 32767.0f / 5;
 
-    std::vector<int16_t> buffer;                             // 大 buffer 存放整首旋律
-    buffer.reserve(midiList.size() * samples_per_note * 2);  // 双声道预留空间
+    // Write directly into the persistent (rotating) buffer instead of
+    // building a temporary vector and copying it in; see play_tone().
+    auto* buffer = acquire_melody_buffer(midiList.size() * samples_per_note);
+    if (!buffer) {
+        return;
+    }
+    std::size_t write_index = 0;
 
     for (int midiNote : midiList) {
         for (int i = 0; i < samples_per_note; ++i) {
@@ -111,14 +149,12 @@ void play_melody(const std::vector<int>& midiList, double durationSec)
                 sample      = static_cast<int16_t>(amp * sin(2.0 * M_PI * freq * i / sample_rate));
             }
 
-            buffer.push_back(sample);  // 左声道
-            buffer.push_back(sample);  // 右声道
+            (*buffer)[write_index++] = sample;  // 左声道
+            (*buffer)[write_index++] = sample;  // 右声道
         }
     }
 
-    auto& persistent_buffer = acquire_melody_buffer(buffer.size() / 2);
-    persistent_buffer = buffer;
-    GetHAL().speaker.playRaw(persistent_buffer.data(), persistent_buffer.size());
+    GetHAL().speaker.playRaw(buffer->data(), buffer->size());
 }
 
 void play_tone_from_midi(int midi, double durationSec)

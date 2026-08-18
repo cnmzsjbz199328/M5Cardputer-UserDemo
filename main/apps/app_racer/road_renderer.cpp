@@ -129,6 +129,11 @@ void RoadRenderer::render(const Track& track, float distance, float playerX, flo
     char speedLabel[48] = {};
     std::snprintf(speedLabel, sizeof(speedLabel), "L%d/3 SC%05ld V%03d", completedLaps + 1,
                   static_cast<long>(std::max<int32_t>(0, score)), static_cast<int>(speed));
+    // The canvas is shared with the launcher, which leaves it set to a 16px
+    // CJK font (FONT_BASIC); setTextSize() alone doesn't change fonts, so
+    // Racer must pick its own font rather than inherit whatever the last
+    // screen left behind.
+    canvas.setFont(&fonts::Font0);
     canvas.setTextSize(1);
     canvas.setTextColor(TFT_WHITE, TFT_BLACK);
     canvas.drawString(speedLabel, 3, 2);
@@ -238,6 +243,7 @@ void RoadRenderer::renderResults(int32_t totalTimeMs, int32_t runBestLapMs, int3
     const uint32_t foreground = flash ? TFT_BLACK : TFT_WHITE;
 
     canvas.fillScreen(background);
+    canvas.setFont(&fonts::Font0);  // see render(): don't inherit the launcher's 16px font
     canvas.setTextSize(1);
     canvas.setTextColor(TFT_CYAN, background);
     canvas.drawString("FINISH", 78, 3);
@@ -259,14 +265,20 @@ void RoadRenderer::renderResults(int32_t totalTimeMs, int32_t runBestLapMs, int3
     std::snprintf(scoreLabel, sizeof(scoreLabel), "SCORE  %ld", static_cast<long>(std::max<int32_t>(0, score)));
 
     canvas.setTextColor(foreground, background);
-    canvas.drawString(totalLabel, 28, 23);
-    canvas.drawString(bestLabel, 28, 36);
-    canvas.drawString(recordLabel, 28, 49);
-    canvas.drawString(scoreLabel, 28, 62);
+    const int lineHeight = canvas.fontHeight() + 4;
+    int lineY            = 23;
+    canvas.drawString(totalLabel, 28, lineY);
+    lineY += lineHeight;
+    canvas.drawString(bestLabel, 28, lineY);
+    lineY += lineHeight;
+    canvas.drawString(recordLabel, 28, lineY);
+    lineY += lineHeight;
+    canvas.drawString(scoreLabel, 28, lineY);
+    lineY += lineHeight;
 
     if (newRecord) {
         canvas.setTextColor(TFT_YELLOW, background);
-        canvas.drawString("NEW RECORD", 69, 76);
+        canvas.drawString("NEW RECORD", 69, lineY);
     }
 
     canvas.setTextColor(TFT_DARKGREY, background);

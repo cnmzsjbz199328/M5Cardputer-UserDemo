@@ -359,6 +359,13 @@ void Hal::wifiDeinit()
         return;
     }
 
+    // Go through the normal disconnect path first (if connected) so
+    // _is_wifi_connected and SNTP get torn down consistently — esp_wifi_stop()
+    // does not run the WIFI_EVENT handling that wifiDisconnect() relies on to
+    // clear it, and callers must be able to trust isWifiConnected() after this
+    // call returns.
+    wifiDisconnect();
+
     esp_wifi_stop();
     esp_wifi_deinit();
     _is_wifi_inited = false;
