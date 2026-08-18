@@ -1,7 +1,10 @@
 #include "app_solar_system.h"
 #include "platform_keymap.h"
+#include "assets/solar_big.h"
+#include "assets/solar_small.h"
 
 #include <apps/utils/audio/audio.h>
+#include <apps/utils/common.h>
 #include <mooncake_log.h>
 #include <algorithm>
 
@@ -18,10 +21,14 @@ float clamp_delta_seconds(uint32_t elapsed_ms)
 
 AppSolarSystem::AppSolarSystem()
 {
-    setAppInfo().name = "Solar System";
+    setAppInfo().name     = "Solar";
+    setAppInfo().userData = new AppIcon_t(image_data_solar_big, image_data_solar_small);
 }
 
-AppSolarSystem::~AppSolarSystem() = default;
+AppSolarSystem::~AppSolarSystem()
+{
+    delete static_cast<AppIcon_t*>(getAppInfo().userData);
+}
 
 void AppSolarSystem::onOpen()
 {
