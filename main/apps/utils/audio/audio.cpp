@@ -3,6 +3,7 @@
  *
  * SPDX-License-Identifier: MIT
  */
+#include <array>
 #include <vector>
 #include <cmath>
 #include <cstdlib>
@@ -16,6 +17,35 @@
 namespace audio {
 
 static bool quiet_mode_is_enabled = false;
+
+namespace {
+
+// M5Unified's speaker task keeps the raw-data pointer and consumes it
+// asynchronously; it does not copy the samples. Keep several buffers alive
+// and rotate them so a short sound is not overwritten while it is playing.
+constexpr std::size_t kAudioBufferCount = 3;
+std::array<std::vector<int16_t>, kAudioBufferCount> tone_buffers;
+std::array<std::vector<int16_t>, kAudioBufferCount> melody_buffers;
+std::size_t tone_buffer_index = 0;
+std::size_t melody_buffer_index = 0;
+
+std::vector<int16_t>& acquire_tone_buffer(std::size_t sample_count)
+{
+    auto& buffer = tone_buffers[tone_buffer_index];
+    tone_buffer_index = (tone_buffer_index + 1) % kAudioBufferCount;
+    buffer.resize(sample_count * 2);
+    return buffer;
+}
+
+std::vector<int16_t>& acquire_melody_buffer(std::size_t sample_count)
+{
+    auto& buffer = melody_buffers[melody_buffer_index];
+    melody_buffer_index = (melody_buffer_index + 1) % kAudioBufferCount;
+    buffer.resize(sample_count * 2);
+    return buffer;
+}
+
+}  // namespace
 
 static std::vector<int> c_major_scale = {60, 62, 64, 65, 67, 69, 71};  // C大调音阶（C D E F G A B）
 
@@ -46,7 +76,9 @@ void play_tone(int frequency, double durationSec)
         buffer[i * 2 + 1] = value;  // 右声道
     }
 
-    GetHAL().speaker.playRaw(buffer.data(), buffer.size());
+    auto& persistent_buffer = acquire_tone_buffer(buffer.size() / 2);
+    persistent_buffer = buffer;
+    GetHAL().speaker.playRaw(persistent_buffer.data(), persistent_buffer.size());
 }
 
 void play_melody(const std::vector<int>& midiList, double durationSec)
@@ -84,7 +116,9 @@ void play_melody(const std::vector<int>& midiList, double durationSec)
         }
     }
 
-    GetHAL().speaker.playRaw(buffer.data(), buffer.size());
+    auto& persistent_buffer = acquire_melody_buffer(buffer.size() / 2);
+    persistent_buffer = buffer;
+    GetHAL().speaker.playRaw(persistent_buffer.data(), persistent_buffer.size());
 }
 
 void play_tone_from_midi(int midi, double durationSec)
