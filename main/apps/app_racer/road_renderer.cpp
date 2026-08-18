@@ -23,7 +23,7 @@ int clamp_int(int value, int low, int high)
 } // namespace
 
 void RoadRenderer::render(const Track& track, float distance, float playerX, float speed,
-                          const std::vector<TrafficCar>& traffic)
+                          const std::vector<TrafficCar>& traffic, bool onRoad, int completedLaps, int32_t score)
 {
     auto& canvas = GetHAL().canvas;
     const int width = canvas.width();
@@ -116,7 +116,7 @@ void RoadRenderer::render(const Track& track, float distance, float playerX, flo
                                          : projections[i - 1];
 
         drawBand(farEdge, nearEdge, width, height, (farEdge.trackIndex & 1U) == 0U,
-                 (farEdge.trackIndex & 1U) != 0U, (farEdge.trackIndex & 1U) == 0U);
+                 (farEdge.trackIndex & 1U) != 0U, (farEdge.trackIndex & 1U) == 0U, !onRoad);
         for (const TrafficProjection& projection : trafficProjections) {
             if (projection.segmentSlot == i) {
                 drawTrafficCar(projection);
@@ -126,15 +126,16 @@ void RoadRenderer::render(const Track& track, float distance, float playerX, flo
 
     drawPlayerCar(width, height, playerX);
 
-    const float lapDistance = std::fmod(std::max(0.0f, distance), track.length());
-    const int lap = static_cast<int>(std::floor(std::max(0.0f, distance) / track.length())) + 1;
-    const int segment = static_cast<int>(lapDistance / Track::kSegmentLength) + 1;
     char speedLabel[48] = {};
-    std::snprintf(speedLabel, sizeof(speedLabel), "L%02d S%03d SPD%03d", lap, segment,
-                  static_cast<int>(speed));
+    std::snprintf(speedLabel, sizeof(speedLabel), "L%d/3 SC%05ld V%03d", completedLaps + 1,
+                  static_cast<long>(std::max<int32_t>(0, score)), static_cast<int>(speed));
     canvas.setTextSize(1);
     canvas.setTextColor(TFT_WHITE, TFT_BLACK);
     canvas.drawString(speedLabel, 3, 2);
+    if (!onRoad) {
+        canvas.setTextColor(TFT_ORANGE, TFT_BLACK);
+        canvas.drawString("OFFROAD", 156, 2);
+    }
 }
 
 void RoadRenderer::drawTrafficCar(const TrafficProjection& projection)
@@ -157,7 +158,7 @@ void RoadRenderer::drawTrafficCar(const TrafficProjection& projection)
 }
 
 void RoadRenderer::drawBand(const Projection& farEdge, const Projection& nearEdge, int width, int height,
-                            bool centerLine, bool alternateGrass, bool alternateRumble)
+                            bool centerLine, bool alternateGrass, bool alternateRumble, bool offRoad)
 {
     auto& canvas = GetHAL().canvas;
 
@@ -170,7 +171,8 @@ void RoadRenderer::drawBand(const Projection& farEdge, const Projection& nearEdg
     }
 
     const uint32_t grassColor = alternateGrass ? TFT_GREEN : TFT_DARKGREEN;
-    const uint32_t rumbleColor = alternateRumble ? TFT_WHITE : TFT_RED;
+    const uint32_t rumbleColor = offRoad ? (alternateRumble ? TFT_YELLOW : TFT_ORANGE)
+                                         : (alternateRumble ? TFT_WHITE : TFT_RED);
     canvas.fillRect(0, topPixel, width, bottomPixel - topPixel + 1, grassColor);
 
     const float span = std::max(0.001f, bottom - top);
@@ -201,7 +203,74 @@ void RoadRenderer::drawBand(const Projection& farEdge, const Projection& nearEdg
                 canvas.drawFastHLine(lineLeft, y, lineRight - lineLeft + 1, TFT_YELLOW);
             }
         }
+
+        if (offRoad) {
+            canvas.drawPixel(0, y, TFT_ORANGE);
+            canvas.drawPixel(width - 1, y, TFT_ORANGE);
+        }
     }
+}
+
+namespace {
+
+void format_time(char* buffer, std::size_t bufferSize, int32_t timeMs)
+{
+    if (timeMs <= 0) {
+        std::snprintf(buffer, bufferSize, "--:--.-");
+        return;
+    }
+
+    const int32_t minutes = timeMs / 60000;
+    const int32_t seconds = (timeMs / 1000) % 60;
+    const int32_t tenths = (timeMs % 1000) / 100;
+    std::snprintf(buffer, bufferSize, "%02ld:%02ld.%ld", static_cast<long>(minutes),
+                  static_cast<long>(seconds), static_cast<long>(tenths));
+}
+
+}  // namespace
+
+void RoadRenderer::renderResults(int32_t totalTimeMs, int32_t runBestLapMs, int32_t allTimeBestLapMs,
+                                 int32_t score, bool newRecord, bool flash)
+{
+    auto& canvas = GetHAL().canvas;
+    const int width = canvas.width();
+    const uint32_t background = flash ? TFT_WHITE : TFT_BLACK;
+    const uint32_t foreground = flash ? TFT_BLACK : TFT_WHITE;
+
+    canvas.fillScreen(background);
+    canvas.setTextSize(1);
+    canvas.setTextColor(TFT_CYAN, background);
+    canvas.drawString("FINISH", 78, 3);
+    canvas.drawRect(18, 17, width - 36, 71, TFT_DARKGREY);
+
+    char totalLabel[32] = {};
+    char bestLabel[32] = {};
+    char recordLabel[32] = {};
+    char scoreLabel[32] = {};
+    char totalTime[16] = {};
+    char bestTime[16] = {};
+    char recordTime[16] = {};
+    format_time(totalTime, sizeof(totalTime), totalTimeMs);
+    format_time(bestTime, sizeof(bestTime), runBestLapMs);
+    format_time(recordTime, sizeof(recordTime), allTimeBestLapMs);
+    std::snprintf(totalLabel, sizeof(totalLabel), "TOTAL  %s", totalTime);
+    std::snprintf(bestLabel, sizeof(bestLabel), "BEST   %s", bestTime);
+    std::snprintf(recordLabel, sizeof(recordLabel), "RECORD %s", recordTime);
+    std::snprintf(scoreLabel, sizeof(scoreLabel), "SCORE  %ld", static_cast<long>(std::max<int32_t>(0, score)));
+
+    canvas.setTextColor(foreground, background);
+    canvas.drawString(totalLabel, 28, 23);
+    canvas.drawString(bestLabel, 28, 36);
+    canvas.drawString(recordLabel, 28, 49);
+    canvas.drawString(scoreLabel, 28, 62);
+
+    if (newRecord) {
+        canvas.setTextColor(TFT_YELLOW, background);
+        canvas.drawString("NEW RECORD", 69, 76);
+    }
+
+    canvas.setTextColor(TFT_DARKGREY, background);
+    canvas.drawString("ANY KEY / HOME", 58, 96);
 }
 
 void RoadRenderer::drawPlayerCar(int width, int height, float playerX)

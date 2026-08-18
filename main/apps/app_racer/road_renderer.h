@@ -10,12 +10,15 @@ struct TrafficCar {
     float lane = 0.0f;
     float speed = 0.0f;
     uint32_t color = 0;
+    bool clean_overtake_eligible = false;
 };
 
 class RoadRenderer {
 public:
     void render(const Track& track, float distance, float playerX, float speed,
-                const std::vector<TrafficCar>& traffic);
+                const std::vector<TrafficCar>& traffic, bool onRoad, int completedLaps, int32_t score);
+    void renderResults(int32_t totalTimeMs, int32_t runBestLapMs, int32_t allTimeBestLapMs, int32_t score,
+                       bool newRecord, bool flash);
 
 private:
     struct Projection {
@@ -36,7 +39,7 @@ private:
     };
 
     void drawBand(const Projection& farEdge, const Projection& nearEdge, int width, int height,
-                  bool centerLine, bool alternateGrass, bool alternateRumble);
+                  bool centerLine, bool alternateGrass, bool alternateRumble, bool offRoad);
     void drawTrafficCar(const TrafficProjection& projection);
     void drawPlayerCar(int width, int height, float playerX);
 };
