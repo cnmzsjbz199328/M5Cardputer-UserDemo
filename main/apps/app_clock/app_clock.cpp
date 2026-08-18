@@ -29,6 +29,9 @@ void AppClock::onOpen()
 {
     mclog::tagInfo(getAppInfo().name, "on open");
     render_interface();
+
+    _key_event_slot_id = GetHAL().keyboard.onKeyEvent.connect(
+        [this](const Keyboard::KeyEvent_t& keyEvent) { handle_key_event(keyEvent); });
 }
 
 void AppClock::onRunning()
@@ -49,6 +52,20 @@ void AppClock::onRunning()
 void AppClock::onClose()
 {
     mclog::tagInfo(getAppInfo().name, "on close");
+    if (_key_event_slot_id >= 0) {
+        GetHAL().keyboard.onKeyEvent.disconnect(_key_event_slot_id);
+        _key_event_slot_id = -1;
+    }
+}
+
+void AppClock::handle_key_event(const Keyboard::KeyEvent_t& keyEvent)
+{
+    if (!keyEvent.state || keyEvent.isModifier) {
+        return;
+    }
+    if (keyEvent.keyCode == KEY_ESC || keyEvent.keyCode == KEY_GRAVE) {
+        close();
+    }
 }
 
 void AppClock::render_interface()

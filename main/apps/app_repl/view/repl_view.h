@@ -18,6 +18,7 @@ public:
 
     std::function<void()> onRenderTips;
     std::function<void(const std::string& command)> onCommand;
+    std::function<void()> onEscape;
     bool autoClearPrompt = true;
 
     virtual void init();

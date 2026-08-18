@@ -37,6 +37,9 @@ void AppImu::onOpen()
     GetHAL().canvas.setTextSize(1);
 
     GetHAL().imu.begin();
+
+    _key_event_slot_id = GetHAL().keyboard.onKeyEvent.connect(
+        [this](const Keyboard::KeyEvent_t& keyEvent) { handle_key_event(keyEvent); });
 }
 
 void AppImu::onRunning()
@@ -68,6 +71,20 @@ void AppImu::onRunning()
 void AppImu::onClose()
 {
     mclog::tagInfo(getAppInfo().name, "on close");
+    if (_key_event_slot_id >= 0) {
+        GetHAL().keyboard.onKeyEvent.disconnect(_key_event_slot_id);
+        _key_event_slot_id = -1;
+    }
+}
+
+void AppImu::handle_key_event(const Keyboard::KeyEvent_t& keyEvent)
+{
+    if (!keyEvent.state || keyEvent.isModifier) {
+        return;
+    }
+    if (keyEvent.keyCode == KEY_ESC || keyEvent.keyCode == KEY_GRAVE) {
+        close();
+    }
 }
 
 void AppImu::render_imu_data_label()

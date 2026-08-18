@@ -72,7 +72,11 @@ void AppSolarSystem::handle_key_event(const Keyboard::KeyEvent_t& keyEvent)
     if (!keyEvent.state || keyEvent.isModifier) return;
 
     const solar::InputEvent event = solar::cardputerIntent(keyEvent);
-    if (event.intent != solar::Intent::None) {
+    if (event.intent == solar::Intent::Back && _camera.systemIndex == solar::SUN_INDEX) {
+        // Already at the top-level heliocentric view: ESC/GRAVE/Backspace
+        // closes the app, matching the project-wide back-gesture convention.
+        close();
+    } else if (event.intent != solar::Intent::None) {
         _camera.handleInput(event, _clock);
     }
 }

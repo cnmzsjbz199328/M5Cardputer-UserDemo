@@ -297,6 +297,8 @@ void AppRecord::handle_menu_key(const Keyboard::KeyEvent_t& keyEvent)
         } else {
             enter_history();
         }
+    } else if (keyEvent.keyCode == KEY_ESC || keyEvent.keyCode == KEY_GRAVE) {
+        close();
     }
 }
 

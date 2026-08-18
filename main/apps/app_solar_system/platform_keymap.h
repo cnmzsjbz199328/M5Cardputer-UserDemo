@@ -26,6 +26,8 @@ inline InputEvent cardputerIntent(const Keyboard::KeyEvent_t& keyEvent)
         case KEY_RIGHTBRACE: return {Intent::SpeedUp, 0.0f};
         case KEY_ENTER:      return {Intent::Select, 0.0f};
         case KEY_BACKSPACE:  return {Intent::Back, 0.0f};
+        case KEY_ESC:        return {Intent::Back, 0.0f};
+        case KEY_GRAVE:      return {Intent::Back, 0.0f};
         default:             return {Intent::None, 0.0f};
     }
 }

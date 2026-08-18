@@ -25,9 +25,11 @@ public:
 private:
     static constexpr uint32_t UPDATE_INTERVAL = 1000;  // Update every 1 second
     uint32_t _time_count                      = 0;
+    int _key_event_slot_id                    = -1;
 
     void render_interface();
     void update_time_display();
     void show_network_time();
     void show_system_time();
+    void handle_key_event(const Keyboard::KeyEvent_t& keyEvent);
 };

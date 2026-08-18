@@ -525,7 +525,11 @@ void AppTimeMachine::handle_key_event(const Keyboard::KeyEvent_t& keyEvent)
         }
     } else if (keyEvent.keyCode == KEY_GRAVE || keyEvent.keyCode == KEY_ESC) {
         audio::play_random_tone();
-        close();
+        if (_playback.started) {
+            reset_playback(false);
+        } else {
+            close();
+        }
     } else if (!_playback.started && (keyEvent.keyCode == KEY_DOWN || keyEvent.keyCode == KEY_DOT)) {
         if (!_stories.empty()) {
             _selected_story_index = (_selected_story_index + 1) % static_cast<int>(_stories.size());

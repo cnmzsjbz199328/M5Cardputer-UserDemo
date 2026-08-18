@@ -93,6 +93,8 @@ void AppRacer::handle_key_event(const Keyboard::KeyEvent_t& keyEvent)
         _steer_left_held = keyEvent.state;
     } else if (keyEvent.keyCode == KEY_RIGHT) {
         _steer_right_held = keyEvent.state;
+    } else if (keyEvent.state && (keyEvent.keyCode == KEY_ESC || keyEvent.keyCode == KEY_GRAVE)) {
+        close();
     }
 }
 

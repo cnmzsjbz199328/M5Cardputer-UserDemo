@@ -179,13 +179,25 @@ void AppBleController::handle_key_event(const Keyboard::KeyEvent_t& keyEvent)
         (state == ECP_CLIENT_STATE_CONNECTED || state == ECP_CLIENT_STATE_CONNECTING ||
          state == ECP_CLIENT_STATE_DISCONNECTING);
 
-    // Fn+` resolves to keyName "esc" at the keyboard driver level; use it as
-    // the universal disconnect/back gesture, matching the Remote Controller
-    // Boundary Constitution's FN+` local escape (esp32_test/AGENTS.md).
-    if (strcmp(keyEvent.keyName, "esc") == 0) {
+    // Fn+` resolves to keyCode KEY_ESC at the keyboard driver level; use it
+    // as the universal back gesture, matching the Remote Controller Boundary
+    // Constitution's FN+` local escape (esp32_test/AGENTS.md) and the
+    // project-wide ESC/GRAVE back convention (see CLAUDE.md).
+    if (keyEvent.keyCode == KEY_ESC) {
         if (connected_or_connecting) {
             ecp_client_disconnect();
+        } else {
+            close();
         }
+        return;
+    }
+
+    // Bare KEY_GRAVE (no Fn) is only the top-level "close" gesture while
+    // disconnected. While connected it must keep falling through to
+    // map_ecp_key() below, which forwards it to the remote as a "back" HID
+    // command -- intercepting it here would break that forwarding.
+    if (keyEvent.keyCode == KEY_GRAVE && !connected_or_connecting) {
+        close();
         return;
     }
 

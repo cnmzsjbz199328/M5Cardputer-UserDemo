@@ -205,6 +205,12 @@ void AppWifiScan::handle_key_event(const Keyboard::KeyEvent_t& keyEvent)
 
 void AppWifiScan::handle_scanning_key(const Keyboard::KeyEvent_t& keyEvent)
 {
+    // Top-level view: ESC/GRAVE closes the app, matching Home.
+    if (keyEvent.keyCode == KEY_ESC || keyEvent.keyCode == KEY_GRAVE) {
+        close();
+        return;
+    }
+
     // Manual rescan, works even when the list is empty
     if (keyEvent.keyCode == KEY_SPACE) {
         render_page_scanning();
@@ -248,6 +254,16 @@ void AppWifiScan::handle_scanning_key(const Keyboard::KeyEvent_t& keyEvent)
 
 void AppWifiScan::handle_password_key(const Keyboard::KeyEvent_t& keyEvent)
 {
+    // ESC always backs out to the network list. GRAVE only backs out from
+    // STATE_FAILED (not STATE_WAIT_PASSWORD), since the bare ` key is a
+    // valid password character being typed there.
+    if (keyEvent.keyCode == KEY_ESC || (keyEvent.keyCode == KEY_GRAVE && _current_state == STATE_FAILED)) {
+        _input_buffer.clear();
+        _current_state = STATE_SCANNING;
+        render_page_result();
+        return;
+    }
+
     switch (keyEvent.keyCode) {
         case KEY_ENTER:
             if (_current_state == STATE_WAIT_PASSWORD) {

@@ -126,6 +126,16 @@ void ReplView::handle_key_event(const Keyboard::KeyEvent_t& keyEvent)
             handle_backspace();
             break;
 
+        // KEY_GRAVE (bare `) is deliberately not bound here: it's a literal
+        // character the user may want to type into the console. Only the
+        // Fn+` / KEY_ESC combo backs out, matching the project-wide
+        // ESC/GRAVE back-gesture convention for non-text-entry views.
+        case KEY_ESC:
+            if (onEscape) {
+                onEscape();
+            }
+            break;
+
         case KEY_SPACE:
             if (_input_buffer.length() < INPUT_BUFFER_SIZE - 1) {
                 _input_buffer += ' ';

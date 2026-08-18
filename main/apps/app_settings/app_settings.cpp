@@ -142,6 +142,11 @@ void AppSettings::handle_key_event(const Keyboard::KeyEvent_t& keyEvent)
             return;
         }
 
+        case KEY_ESC:
+        case KEY_GRAVE:
+            close();
+            return;
+
         default:
             return;
     }

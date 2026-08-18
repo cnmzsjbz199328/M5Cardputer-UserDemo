@@ -81,6 +81,7 @@ void AppREPL::onOpen()
         GetHAL().canvas.println(tips.c_str());
     };
     _repl_view->onCommand = [this](const std::string& command) { execute_python_command(command); };
+    _repl_view->onEscape  = [this]() { close(); };
     _repl_view->init();
 }
 
