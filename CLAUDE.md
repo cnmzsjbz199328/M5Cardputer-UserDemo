@@ -86,6 +86,54 @@ unless they need extra include dirs (see the explicit `app_solar_system` /
 `.clang-format` (Google-based, 4-space, 120-col-ish) governs C/C++ style
 project-wide.
 
+## Memory Constraints (No PSRAM)
+
+This board's config has **no PSRAM** (`CONFIG_SPIRAM` is not set) — everything
+(WiFi driver buffers, the display's three canvas sprites, audio buffers, app
+state) shares one pool of internal SRAM, roughly 245KB of which is usable at
+runtime. This is tighter than it looks:
+
+- All installed apps are constructed once at boot (`installApp()` in
+  `main/main.cpp`) and live for the whole session, not just while "open" —
+  `onOpen()`/`onClose()` are lifecycle hooks, not construction/destruction.
+  Any sizeable buffer, `std::vector`, or `std::string` held as a member
+  variable is permanently resident and shrinks the shared budget for every
+  other app, even if that app is never opened. Prefer allocating anything
+  non-trivial inside `onOpen()` and freeing it in `onClose()` over holding it
+  as a member.
+- Measured in practice: right after the WiFi driver inits (nothing else
+  running), free heap drops to ~32KB with a ~24KB largest contiguous block.
+  A HTTPS request (mbedTLS handshake + cert-bundle verification) reliably
+  fails at that ceiling — the weather feature in `app_clock` was removed for
+  exactly this reason (see git history) after confirming with heap logging
+  that failure was `MBEDTLS_ERR_PK_ALLOC_FAILED`-class, not a fixable request
+  bug. Treat any future HTTPS/TLS feature on this board as similarly
+  unlikely to fit unless the memory budget changes (e.g. a PSRAM-equipped
+  board variant).
+- WiFi (and any other heavy `GetHAL()` resource with an init/deinit or
+  connect/disconnect pair — BLE, ESP-NOW, etc.) should be connected only for
+  as long as actively needed, then torn down: prefer `GetHAL().wifiDeinit()`
+  over just `wifiDisconnect()` when an app is done with it, since deinit is
+  what actually frees the driver's internal buffer pools (tens of KB);
+  disconnect alone leaves them parked. `Hal::wifiDeinit()` runs
+  `wifiDisconnect()` internally first so `isWifiConnected()` stays accurate.
+  `app_ble_controller`'s `onClose()` (explicit disconnect, "don't leave a
+  link behind") and `app_clock`'s network task are the reference examples.
+  Apps that exist specifically to hold a connection (e.g. `app_wifi_scan`
+  mid-test) are the exception, not apps that just need one thing fetched.
+- `std::vector::resize()` is not safe to reason about as "allocates exactly
+  what I asked for": libstdc++'s growth policy can round a shrinking/regrowing
+  buffer up to roughly double its *previous* content size. If you gate an
+  allocation on a free-heap check, compare against what `resize()` will
+  actually request (drop capacity first with `clear()` + `shrink_to_fit()` if
+  you need an exact-size guarantee), not a naive size delta — see
+  `main/apps/utils/audio/audio.cpp`'s `acquire_buffer()` for the pattern.
+- This project builds with `-fno-exceptions`. A failed allocation does not
+  throw `std::bad_alloc` to catch — it calls `abort()` directly. Guard
+  allocations you suspect could fail (anything sized from user/network input,
+  or run after WiFi/TLS use) with an up-front `heap_caps_get_largest_free_block()`
+  check and a graceful skip, not a `try`/`catch`.
+
 ## UI/UX and SD-card Review Rules
 
 The rendered app canvas is 204x109 pixels. Preserve visual breathing room and

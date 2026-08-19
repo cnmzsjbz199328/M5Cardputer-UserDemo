@@ -18,4 +18,5 @@
 #include "app_time_machine/app_time_machine.h"
 #include "app_solar_system/app_solar_system.h"
 #include "app_racer/app_racer.h"
+#include "app_gravity_slice/app_gravity_slice.h"
 #include "app_settings/app_settings.h"

@@ -39,6 +39,7 @@ extern "C" void app_main(void)
     GetMooncake().installApp(std::make_unique<AppTimeMachine>());
     GetMooncake().installApp(std::make_unique<AppSolarSystem>());
     GetMooncake().installApp(std::make_unique<AppRacer>());
+    GetMooncake().installApp(std::make_unique<AppGravitySlice>());
     GetMooncake().installApp(std::make_unique<AppSettings>());
     // GetMooncake().installApp(std::make_unique<AppDummy>());
 
